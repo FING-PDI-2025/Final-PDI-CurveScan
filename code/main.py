@@ -5,7 +5,7 @@ import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
 from functools import cached_property
-from typing import Optional, Any
+from typing import Optional, Any, TypeAlias, Sequence
 import cv2 as cv
 from typing import Self
 import pandas as pd
@@ -21,6 +21,8 @@ log = logging.getLogger("rich")
 from rich.console import Console
 
 console = Console()
+Img: TypeAlias = cv.Mat | np.ndarray[Any, np.dtype]
+Contour: TypeAlias = Img
 
 
 class Dataset:
@@ -238,7 +240,7 @@ def region_detect(image: np.ndarray) -> np.ndarray:
     return image
 
 
-def region_detect2(image: np.ndarray) -> tuple[np.ndarray, float,  cv.Mat | np.ndarray[Any, np.dtype]]:
+def region_detect2(image: np.ndarray) -> tuple[Img, float,  Contour, Contour]:
     """
     Detect the regions of the image based on Canny edges
     """
@@ -259,7 +261,15 @@ def region_detect2(image: np.ndarray) -> tuple[np.ndarray, float,  cv.Mat | np.n
     area = cv.contourArea(highest_area_contour)
     image = cv.bitwise_and(image, image, mask=mask)
 
-    return image, area, highest_area_contour
+    # Find contours in the mask
+    clean_contours, _ = cv.findContours(mask, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+    if not clean_contours:
+        largest_clean_contour = highest_area_contour
+    else:
+        # Get largest contour
+        largest_clean_contour = max(clean_contours, key=cv.contourArea)
+
+    return image, area, highest_area_contour, largest_clean_contour
 
 
 def is_image_blurry(image: np.ndarray) -> float:
@@ -331,13 +341,16 @@ def find_contour(image: np.ndarray) -> tuple[np.ndarray, float]:
 
 def main():
     dataset = Dataset()
-    render=True
+    render=False
+    hide_correct=False
     # log.info(dataset.pretty_df)
     sample = dataset.get("simple", False, False)
     log.info(sample)
     df_rows = []
-    proced = process_samples(dataset, df_rows)
-    for i, batch in enumerate(itertools.batched(proced, 4)):
+    proced = process_samples(dataset)
+    for i, item in enumerate(itertools.batched((it for it in proced if not hide_correct or not it[1]['is_correct (estimated)']), 4)):
+        batch = [x for x, y in item if x is not None]
+        df_rows.extend([y for x, y in item])
         if not render: continue
         print([x.shape for x in batch])
         if len(batch) != 1:
@@ -346,7 +359,7 @@ def main():
             batch = batch[0]
         Utils.show_image(batch, wait=False, offset=i)
     df = pd.DataFrame(df_rows)
-    df = df.sort_values(["is_correct (estimated)", "blur", "name", "has_flash", "has_light"]).reset_index(drop=True)
+    # df = df.sort_values(["is_correct (estimated)", "blur", "name", "has_flash", "has_light"]).reset_index(drop=True)
     console.print(Panel(str(df), highlight=True))
     console.print(f"Total correct detections (estimated): {df['is_correct (estimated)'].sum()}")
     # Is correct group by (has_flash and has_light)
@@ -368,90 +381,72 @@ def main():
     if render: Utils.show_image(wait=True)
 
 
-def process_samples(dataset, df_rows):
+def process_samples(dataset):
     for smp in dataset.items:
-        yield from process_sample(df_rows, smp)
+        yield from process_sample(smp)
 
 
-def process_sample(df_rows, smp):
+def process_sample(smp):
     blurry = is_image_blurry3(smp.data)
     is_blurry = blurry < 50
     image_data = smp.data
-    processed, area, largest_contour = region_detect2(image_data)
-    estimated_is_detection_correct = area > 100_000
-    morphological_gradient = cv.morphologyEx(
-        image_data, cv.MORPH_GRADIENT, cv.getStructuringElement(cv.MORPH_RECT, (3, 3))
-    )
+    raw_processed, raw_area, raw_contour, raw_clean_contour = region_detect2(image_data)
+    morph_processed, morph_area, morph_contour, morph_clean_contour = morphological_region_detect(image_data)
 
-    # Convert to int16, Compute 2*blue - red - green; discard negative values, convert to uint8
-    signed_mg = morphological_gradient.copy().astype(np.int16)
-    mask = 2 * signed_mg[:, :, 0] - signed_mg[:, :, 1] - signed_mg[:, :, 2]
-    mask[mask < 0] = 0
-    mask = mask.astype(np.uint8)
-    mask = cv.medianBlur(mask, 5)
-    # Apply morphological operations to clean up the mask
-    kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (5, 5))
-    mask = cv.morphologyEx(mask, cv.MORPH_CLOSE, kernel)
-    mask = cv.morphologyEx(mask, cv.MORPH_CLOSE, kernel)
-    mask *= 3
-    mask = cv.cvtColor(mask, cv.COLOR_GRAY2BGR)
-    contours, area = find_contour(mask)
-    regions = line_detect(mask)
+    morph_detected_something = morph_area > 100_000
+    raw_detected_something = raw_area > 100_000
 
-    # Find contours in the morphological gradient
-    contoursz, _ = cv.findContours(
-        cv.cvtColor(mask, cv.COLOR_BGR2GRAY), cv.RETR_LIST , cv.CHAIN_APPROX_SIMPLE
-    )
-    contour_area = 0
-    new_largest_contour = None
-    # Get largest contour
-    if contoursz:
-        new_largest_contour = max(contoursz, key=cv.contourArea)
-        # Draw the largest contour on the original image
-        contoursz = cv.drawContours(np.zeros_like(mask), [new_largest_contour], -1, (255, 255, 255), thickness=cv.FILLED)
-        contoursz = cv.cvtColor(contoursz, cv.COLOR_BGR2GRAY)
-        contoursz = cv.medianBlur(contoursz, 5)
-        kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (50, 50))
-        # Apply morphological operations to clean up the contours
-        contoursz = cv.morphologyEx(contoursz, cv.MORPH_ERODE, kernel)
-        contoursz = cv.morphologyEx(contoursz, cv.MORPH_DILATE, kernel)
-        contour_area = cv.contourArea(new_largest_contour)
 
+    morph_approx = cv2.approxPolyN(morph_clean_contour, 4)
+    morph_corners = cv.drawContours(np.zeros_like(image_data), [morph_approx], -1, (255, 255, 255), thickness=cv.FILLED)
+
+    raw_approx = cv2.approxPolyN(raw_clean_contour, 4)
+    raw_corners = cv.drawContours(np.zeros_like(image_data), [raw_approx], -1, (255, 255, 255), thickness=cv.FILLED)
+
+    # count number of non-black pixels in the processed image
+    morph_non_black_corners = np.count_nonzero(morph_corners)
+    morph_non_black_processed = np.count_nonzero(morph_processed)
+    morph_size_ratio = abs(morph_non_black_corners / (morph_non_black_processed + 1) - 1)
+    morph_is_correct = morph_area > 100_000
+
+    raw_non_black_corners = np.count_nonzero(raw_corners)
+    raw_non_black_processed = np.count_nonzero(raw_processed)
+    raw_size_ratio = abs(raw_non_black_corners / (raw_non_black_processed + 1) - 1)
+    raw_is_correct = raw_area > 100_000 and raw_size_ratio < 0.1
+
+    if morph_is_correct:
+        processed = morph_processed
+        area = morph_area
+        contour = morph_contour
+        size_ratio = morph_size_ratio
     else:
-        log.warning("No contours found in the morphological gradient.")
-        contoursz = np.zeros_like(mask)
+        processed = raw_processed
+        area = raw_area
+        contour = raw_contour
+        size_ratio = raw_size_ratio
 
-    processed_b = cv.bitwise_and(image_data, image_data, mask=contoursz)
-    contoursz = cv.cvtColor(contoursz, cv.COLOR_GRAY2BGR)
 
-    if contour_area > area:
-        processed = processed_b
-        area = contour_area
-        largest_contour = new_largest_contour
-        estimated_is_detection_correct = contour_area > 100_000
+    estimated_is_detection_correct = area > 100_000 and size_ratio < 0.1
+    # log.debug(f"Morph: {morph_non_black_corners / (morph_non_black_processed + 1)}\n" + f"Raw: {raw_non_black_corners / (raw_non_black_processed + 1)}")
+    display = np.hstack((image_data, raw_processed, raw_corners, morph_processed, morph_corners))
+    # log.debug(display.shape)
 
-    approx = cv2.approxPolyN(largest_contour, 4)
-    corners = np.zeros_like(image_data)
-    corners = cv.drawContours(corners, [approx], -1, (255, 255, 255), thickness=cv.FILLED)
-    print(f"Contour area: {contour_area}, Approx vertices: {approx}")
-
-    display = np.hstack((image_data, processed, corners))
-    log.debug(display.shape)
+    df_row = {
+        "name": smp.name,
+        "has_flash": smp.has_flash,
+        "has_light": smp.has_light,
+        "blur": blurry,
+        "is_blurry": is_blurry,
+        "area": area,
+        "raw_ratio": f"{raw_size_ratio:.2f}",
+        "raw_detected": raw_detected_something,
+        "morph_ratio": f"{morph_size_ratio:.2f}",
+        "morph_detected": morph_detected_something,
+        "is_correct (estimated)": estimated_is_detection_correct,
+    }
     # Ignore horizontal images.
-    if display.shape[0] > 899:
-        yield display
-        # Utils.show_image(display)
-    df_rows.append(
-        {
-            "name": smp.name,
-            "has_flash": smp.has_flash,
-            "has_light": smp.has_light,
-            "blur": blurry,
-            "is_blurry": is_blurry,
-            "area": area,
-            "is_correct (estimated)": estimated_is_detection_correct,
-        }
-    )
+    yield display if display.shape[0] > 899 else None, df_row
+    # Utils.show_image(display)
     # console.print(
     #     Panel(
     #         f"Image: {smp.name}\n"
@@ -464,6 +459,52 @@ def process_sample(df_rows, smp):
     #         title=smp.path.name,
     #     )
     # )
+
+
+def morphological_region_detect(image_data: np.ndarray) -> tuple[Img, float, Contour, Contour]:
+    morphological_gradient: np.ndarray = cv.morphologyEx(image_data, cv.MORPH_GRADIENT, cv.getStructuringElement(cv.MORPH_RECT, (3, 3)))
+    signed_mg: np.ndarray = morphological_gradient.copy().astype(np.int16)
+    mask: np.ndarray = mask_blue(signed_mg)
+    # Find contours in the morphological gradient
+    contours, _ = cv.findContours(cv.cvtColor(mask, cv.COLOR_BGR2GRAY), cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        log.warning("No contours found in the morphological gradient.")
+        return 0, [], np.zeros_like(image_data)
+    largest_contour = max(contours, key=cv.contourArea)
+    # Draw the largest contour on the original image
+    contour_render = cv.drawContours(np.zeros_like(mask), [largest_contour], -1, (255, 255, 255), thickness=cv.FILLED)
+    contour_render = cv.cvtColor(contour_render, cv.COLOR_BGR2GRAY)
+    contour_render = cv.medianBlur(contour_render, 5)
+    # Apply morphological operations to clean up the contours
+    contour_render = cv.morphologyEx(contour_render, cv.MORPH_ERODE, cv.getStructuringElement(cv.MORPH_ELLIPSE, (50, 50)))
+    contour_render = cv.morphologyEx(contour_render, cv.MORPH_DILATE, cv.getStructuringElement(cv.MORPH_ELLIPSE, (50, 50)))
+    area = cv.contourArea(largest_contour)
+    masked_image = cv.bitwise_and(image_data, image_data, mask=contour_render)
+
+    # Detect contour on contour_render
+    clean_contours, _ = cv.findContours(contour_render, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+    if not clean_contours:
+        largest_clean_contour = largest_contour
+    else:
+        # Get largest contour
+        largest_clean_contour = max(clean_contours, key=cv.contourArea)
+
+
+    return masked_image, area, largest_contour, largest_clean_contour
+
+
+def mask_blue(inp: np.ndarray) -> np.ndarray:
+    # Detect "Blue"
+    mask: np.ndarray = 2 * inp[:, :, 0] - inp[:, :, 1] - inp[:, :, 2]
+    mask[mask < 0] = 0
+    mask = mask.astype(np.uint8)
+    mask = cv.medianBlur(mask, 5)
+    # Apply morphological operations to clean up the mask
+    mask = cv.morphologyEx(mask, cv.MORPH_CLOSE, cv.getStructuringElement(cv.MORPH_ELLIPSE, (5, 5)))
+    mask = cv.morphologyEx(mask, cv.MORPH_CLOSE, cv.getStructuringElement(cv.MORPH_ELLIPSE, (5, 5)))
+    mask *= 3
+    mask = cv.cvtColor(mask, cv.COLOR_GRAY2BGR)
+    return mask
 
 
 if __name__ == "__main__":
