@@ -1,9 +1,11 @@
+import itertools
+
 import cv2
 import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
 from functools import cached_property
-from typing import Optional
+from typing import Optional, Any
 import cv2 as cv
 from typing import Self
 import pandas as pd
@@ -178,16 +180,22 @@ class Utils:
         console.print(concatenated)
 
     @staticmethod
-    def show_image(*image: np.ndarray) -> None:
+    def show_image(*image: np.ndarray, wait=True, offset=0) -> None:
         """
         Show the image using OpenCV
         """
         for i, img in enumerate(image):
-            window = f"Image {i}"
+            window = f"Image {i+offset}"
             cv.namedWindow(window, cv2.WINDOW_NORMAL)
             cv.imshow(window, img)
-            cv.moveWindow(window, 800 * i, 100)
-            cv.resizeWindow(window, 800, 600)
+            pos = (i + offset)
+            x = pos % 12
+            y = pos // 12
+
+            cv.moveWindow(window, 600 * x + 1, 600 * y + 1)
+            cv.resizeWindow(window, 600, 600)
+        if not wait:
+            return
         cv.waitKey(0)
         cv.destroyAllWindows()
 
@@ -206,6 +214,7 @@ def line_detect(image: np.ndarray) -> np.ndarray:
     Detect the lines of the image
     """
     # Convert to grayscale and apply Canny edge detection
+    out = image.copy()
     gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
     edges = cv.Canny(gray, 100, 200)
     lines = cv.HoughLinesP(
@@ -213,8 +222,8 @@ def line_detect(image: np.ndarray) -> np.ndarray:
     )
     for line in lines:
         x1, y1, x2, y2 = line[0]
-        cv.line(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-    return image
+        cv.line(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
+    return out
 
 
 def region_detect(image: np.ndarray) -> np.ndarray:
@@ -229,12 +238,12 @@ def region_detect(image: np.ndarray) -> np.ndarray:
     return image
 
 
-def region_detect2(image: np.ndarray) -> tuple[np.ndarray, float]:
+def region_detect2(image: np.ndarray) -> tuple[np.ndarray, float,  cv.Mat | np.ndarray[Any, np.dtype]]:
     """
     Detect the regions of the image based on Canny edges
     """
     gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
-    edges = cv.Canny(gray, 100, 200)
+    edges = cv.Canny(gray, 100, 250)
     contours, _ = cv.findContours(edges, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
 
     highest_area_contour = max(contours, key=cv.contourArea)
@@ -250,7 +259,7 @@ def region_detect2(image: np.ndarray) -> tuple[np.ndarray, float]:
     area = cv.contourArea(highest_area_contour)
     image = cv.bitwise_and(image, image, mask=mask)
 
-    return image, area
+    return image, area, highest_area_contour
 
 
 def is_image_blurry(image: np.ndarray) -> float:
@@ -304,55 +313,157 @@ def high_pass_filter(image: np.ndarray) -> np.ndarray:
     filtered = cv.filter2D(image, -1, kernel)
     return filtered
 
+def find_contour(image: np.ndarray) -> tuple[np.ndarray, float]:
+    """
+    Find contours in the image
+    """
+    gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
+    _, thresh = cv.threshold(gray, 127, 255, cv.THRESH_BINARY)
+    contours, _ = cv.findContours(thresh, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+    highest_area_contour = max(contours, key=cv.contourArea)
+    mask = np.zeros(image.shape[:2], dtype="uint8")
+    mask = cv.drawContours(
+        mask, [highest_area_contour], -1, (255, 255, 255), thickness=cv.FILLED
+    )
+    area = cv.contourArea(highest_area_contour)
+    image = cv.bitwise_and(image, image, mask=mask)
+    return image, area
+
 def main():
     dataset = Dataset()
+    render=True
     # log.info(dataset.pretty_df)
     sample = dataset.get("simple", False, False)
     log.info(sample)
     df_rows = []
-    for smp in dataset.items:
-        blurry = is_image_blurry3(smp.data)
-        is_blurry = blurry < 50
-        image_data = smp.data
-        # if is_blurry:
-        #     image_data = sharpen(image_data)
-        #     image_data = sharpen(image_data)
-
-        processed, area = region_detect2(image_data)
-        estimated_is_detection_correct = area > 100_000
-        if not estimated_is_detection_correct:
-            image_data = high_pass_filter(image_data)
-            processed, area = region_detect2(image_data)
-            estimated_is_detection_correct = area > 100_000
-            # Utils.show_image(image_data, processed)
-        df_rows.append(
-            {
-                "name": smp.name,
-                "has_flash": smp.has_flash,
-                "has_light": smp.has_light,
-                "blur": blurry,
-                "is_blurry": is_blurry,
-                "area": area,
-                "is_correct (estimated)": estimated_is_detection_correct,
-            }
-        )
-        # console.print(
-        #     Panel(
-        #         f"Image: {smp.name}\n"
-        #         f"Has flash: {smp.has_flash}\n"
-        #         f"Has light: {smp.has_light}\n"
-        #         f"Is blurry: {is_image_blurry(smp.data)}\n"
-        #         f"Detected area: {area}\n"
-        #         f"Is correct (estimated): {estimated_is_detection_correct}",
-        #         highlight=True,
-        #         title=smp.path.name,
-        #     )
-        # )
+    proced = process_samples(dataset, df_rows)
+    for i, batch in enumerate(itertools.batched(proced, 4)):
+        if not render: continue
+        print([x.shape for x in batch])
+        if len(batch) != 1:
+            batch = np.vstack(batch)
+        else:
+            batch = batch[0]
+        Utils.show_image(batch, wait=False, offset=i)
     df = pd.DataFrame(df_rows)
     df = df.sort_values(["is_correct (estimated)", "blur", "name", "has_flash", "has_light"]).reset_index(drop=True)
     console.print(Panel(str(df), highlight=True))
     console.print(f"Total correct detections (estimated): {df['is_correct (estimated)'].sum()}")
+    # Is correct group by (has_flash and has_light)
+    correct_grouped = df.groupby(["has_flash", "has_light"])["is_correct (estimated)"].agg(['sum', 'count']).reset_index()
+    correct_grouped['percentage'] = (correct_grouped['sum'] / correct_grouped['count']) * 100
+    console.print(Panel(str(correct_grouped), highlight=True, title="Correct Detections Grouped by Flash and Light"))
 
+    correct_grouped = df.groupby(["name"])["is_correct (estimated)"].agg(
+        ['sum', 'count']).reset_index()
+    correct_grouped['percentage'] = (correct_grouped['sum'] / correct_grouped['count']) * 100
+    console.print(Panel(str(correct_grouped), highlight=True, title="Correct Detections Grouped by Name"))
+
+    correct_total = df['is_correct (estimated)'].sum()
+    total_images = len(df)
+    console.print(
+        f"Total correct detections (estimated): {correct_total} out of {total_images} ({(correct_total / total_images) * 100:.2f}%)"
+    )
+
+    if render: Utils.show_image(wait=True)
+
+
+def process_samples(dataset, df_rows):
+    for smp in dataset.items:
+        yield from process_sample(df_rows, smp)
+
+
+def process_sample(df_rows, smp):
+    blurry = is_image_blurry3(smp.data)
+    is_blurry = blurry < 50
+    image_data = smp.data
+    processed, area, largest_contour = region_detect2(image_data)
+    estimated_is_detection_correct = area > 100_000
+    morphological_gradient = cv.morphologyEx(
+        image_data, cv.MORPH_GRADIENT, cv.getStructuringElement(cv.MORPH_RECT, (3, 3))
+    )
+
+    # Convert to int16, Compute 2*blue - red - green; discard negative values, convert to uint8
+    signed_mg = morphological_gradient.copy().astype(np.int16)
+    mask = 2 * signed_mg[:, :, 0] - signed_mg[:, :, 1] - signed_mg[:, :, 2]
+    mask[mask < 0] = 0
+    mask = mask.astype(np.uint8)
+    mask = cv.medianBlur(mask, 5)
+    # Apply morphological operations to clean up the mask
+    kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (5, 5))
+    mask = cv.morphologyEx(mask, cv.MORPH_CLOSE, kernel)
+    mask = cv.morphologyEx(mask, cv.MORPH_CLOSE, kernel)
+    mask *= 3
+    mask = cv.cvtColor(mask, cv.COLOR_GRAY2BGR)
+    contours, area = find_contour(mask)
+    regions = line_detect(mask)
+
+    # Find contours in the morphological gradient
+    contoursz, _ = cv.findContours(
+        cv.cvtColor(mask, cv.COLOR_BGR2GRAY), cv.RETR_LIST , cv.CHAIN_APPROX_SIMPLE
+    )
+    contour_area = 0
+    new_largest_contour = None
+    # Get largest contour
+    if contoursz:
+        new_largest_contour = max(contoursz, key=cv.contourArea)
+        # Draw the largest contour on the original image
+        contoursz = cv.drawContours(np.zeros_like(mask), [new_largest_contour], -1, (255, 255, 255), thickness=cv.FILLED)
+        contoursz = cv.cvtColor(contoursz, cv.COLOR_BGR2GRAY)
+        contoursz = cv.medianBlur(contoursz, 5)
+        kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (50, 50))
+        # Apply morphological operations to clean up the contours
+        contoursz = cv.morphologyEx(contoursz, cv.MORPH_ERODE, kernel)
+        contoursz = cv.morphologyEx(contoursz, cv.MORPH_DILATE, kernel)
+        contour_area = cv.contourArea(new_largest_contour)
+
+    else:
+        log.warning("No contours found in the morphological gradient.")
+        contoursz = np.zeros_like(mask)
+
+    processed_b = cv.bitwise_and(image_data, image_data, mask=contoursz)
+    contoursz = cv.cvtColor(contoursz, cv.COLOR_GRAY2BGR)
+
+    if contour_area > area:
+        processed = processed_b
+        area = contour_area
+        largest_contour = new_largest_contour
+        estimated_is_detection_correct = contour_area > 100_000
+
+    approx = cv2.approxPolyN(largest_contour, 4)
+    corners = np.zeros_like(image_data)
+    corners = cv.drawContours(corners, [approx], -1, (255, 255, 255), thickness=cv.FILLED)
+    print(f"Contour area: {contour_area}, Approx vertices: {approx}")
+
+    display = np.hstack((image_data, processed, corners))
+    log.debug(display.shape)
+    # Ignore horizontal images.
+    if display.shape[0] > 899:
+        yield display
+        # Utils.show_image(display)
+    df_rows.append(
+        {
+            "name": smp.name,
+            "has_flash": smp.has_flash,
+            "has_light": smp.has_light,
+            "blur": blurry,
+            "is_blurry": is_blurry,
+            "area": area,
+            "is_correct (estimated)": estimated_is_detection_correct,
+        }
+    )
+    # console.print(
+    #     Panel(
+    #         f"Image: {smp.name}\n"
+    #         f"Has flash: {smp.has_flash}\n"
+    #         f"Has light: {smp.has_light}\n"
+    #         f"Is blurry: {is_image_blurry(smp.data)}\n"
+    #         f"Detected area: {area}\n"
+    #         f"Is correct (estimated): {estimated_is_detection_correct}",
+    #         highlight=True,
+    #         title=smp.path.name,
+    #     )
+    # )
 
 
 if __name__ == "__main__":
