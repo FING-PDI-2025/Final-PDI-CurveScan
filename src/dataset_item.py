@@ -88,4 +88,7 @@ class DatasetItem:
         """
         Get the image data
         """
-        return cv.imread(str(self.path.absolute()), cv.IMREAD_UNCHANGED)
+        result = cv.imread(str(self.path.absolute()), cv.IMREAD_UNCHANGED)
+        if result is None:
+            raise ValueError(f"Image {self.path.absolute()} not found")
+        return result

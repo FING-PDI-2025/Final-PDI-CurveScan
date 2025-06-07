@@ -71,6 +71,8 @@ def region_detect2(image: np.ndarray) -> tuple[Img, float, Contour, Contour]:
     gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
     edges = cv.Canny(gray, 100, 250)
     contours, _ = cv.findContours(edges, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+    if len(contours) == 0:
+        raise ValueError(f"No contours found in image.")
 
     highest_area_contour = max(contours, key=cv.contourArea)
     mask = np.zeros(image.shape[:2], dtype="uint8")
@@ -199,114 +201,118 @@ def analyse_results(processed, area, contour, clean_contour):
 
 
 def process_sample(smp, output_dir: Path):
-    blurry = is_image_blurry3(smp.data)
-    is_blurry = blurry < 50
-    image_data = smp.data
-    (
-        raw_processed,
-        raw_area,
-        raw_contour,
-        raw_clean_contour,
-        raw_is_correct,
-        raw_size_ratio,
-        raw_corners,
-    ) = analyse_results(*region_detect2(image_data))
-    (
-        morph_r_processed,
-        morph_r_area,
-        morph_r_contour,
-        morph_r_clean_contour,
-        morph_r_is_correct,
-        morph_r_size_ratio,
-        morph_r_corners,
-    ) = analyse_results(*morphological_region_detect(image_data, 2))
-    (
-        morph_g_processed,
-        morph_g_area,
-        morph_g_contour,
-        morph_g_clean_contour,
-        morph_g_is_correct,
-        morph_g_size_ratio,
-        morph_g_corners,
-    ) = analyse_results(*morphological_region_detect(image_data, 1))
-    (
-        morph_b_processed,
-        morph_b_area,
-        morph_b_contour,
-        morph_b_clean_contour,
-        morph_b_is_correct,
-        morph_b_size_ratio,
-        morph_b_corners,
-    ) = analyse_results(*morphological_region_detect(image_data, 0))
+    try:
+        blurry = is_image_blurry3(smp.data)
+        is_blurry = blurry < 50
+        image_data = smp.data
+        (
+            raw_processed,
+            raw_area,
+            raw_contour,
+            raw_clean_contour,
+            raw_is_correct,
+            raw_size_ratio,
+            raw_corners,
+        ) = analyse_results(*region_detect2(image_data))
+        # (
+        #     morph_r_processed,
+        #     morph_r_area,
+        #     morph_r_contour,
+        #     morph_r_clean_contour,
+        #     morph_r_is_correct,
+        #     morph_r_size_ratio,
+        #     morph_r_corners,
+        # ) = analyse_results(*morphological_region_detect(image_data, 2))
+        # (
+        #     morph_g_processed,
+        #     morph_g_area,
+        #     morph_g_contour,
+        #     morph_g_clean_contour,
+        #     morph_g_is_correct,
+        #     morph_g_size_ratio,
+        #     morph_g_corners,
+        # ) = analyse_results(*morphological_region_detect(image_data, 1))
+        (
+            morph_b_processed,
+            morph_b_area,
+            morph_b_contour,
+            morph_b_clean_contour,
+            morph_b_is_correct,
+            morph_b_size_ratio,
+            morph_b_corners,
+        ) = analyse_results(*morphological_region_detect(image_data, 0))
 
-    precedence = ["morph_b", "morph_g", "morph_r", "raw"]
-    processed = None
-    area = 0
-    contour = None
-    clean_contour = None
-    is_correct = False
-    size_ratio = 0
-    corners = None
-    # Select first that "is_correct"
-    for name in precedence:
-        if locals()[f"{name}_is_correct"]:
-            processed = locals()[f"{name}_processed"]
-            area = locals()[f"{name}_area"]
-            contour = locals()[f"{name}_contour"]
-            clean_contour = locals()[f"{name}_clean_contour"]
-            is_correct = locals()[f"{name}_is_correct"]
-            size_ratio = locals()[f"{name}_size_ratio"]
-            corners = locals()[f"{name}_corners"]
-            break
-    if processed is None:
-        # Show morph_b
-        processed = morph_b_processed
-        area = morph_b_area
-        contour = morph_b_contour
-        clean_contour = morph_b_clean_contour
-        is_correct = morph_b_is_correct
-        size_ratio = morph_b_size_ratio
-        corners = morph_b_corners
+        # precedence = ["morph_b", "morph_g", "morph_r", "raw"]
+        precedence = ["morph_b", "raw"]
+        processed = None
+        area = 0
+        contour = None
+        clean_contour = None
+        is_correct = False
+        size_ratio = 0
+        corners = None
+        # Select first that "is_correct"
+        for name in precedence:
+            if locals()[f"{name}_is_correct"]:
+                processed = locals()[f"{name}_processed"]
+                area = locals()[f"{name}_area"]
+                contour = locals()[f"{name}_contour"]
+                clean_contour = locals()[f"{name}_clean_contour"]
+                is_correct = locals()[f"{name}_is_correct"]
+                size_ratio = locals()[f"{name}_size_ratio"]
+                corners = locals()[f"{name}_corners"]
+                break
+        if processed is None:
+            # Show morph_b
+            processed = morph_b_processed
+            area = morph_b_area
+            contour = morph_b_contour
+            clean_contour = morph_b_clean_contour
+            is_correct = morph_b_is_correct
+            size_ratio = morph_b_size_ratio
+            corners = morph_b_corners
 
-    # log.debug(f"Morph: {morph_non_black_corners / (morph_non_black_processed + 1)}\n" + f"Raw: {raw_non_black_corners / (raw_non_black_processed + 1)}")
-    display = np.hstack((image_data, processed, corners))
-    # log.debug(display.shape)
+        # log.debug(f"Morph: {morph_non_black_corners / (morph_non_black_processed + 1)}\n" + f"Raw: {raw_non_black_corners / (raw_non_black_processed + 1)}")
+        display = np.hstack((image_data, processed, corners))
+        # log.debug(display.shape)
 
-    df_row = {
-        "name": smp.name,
-        "has_flash": smp.has_flash,
-        "has_light": smp.has_light,
-        "blur": blurry,
-        "is_blurry": is_blurry,
-        "area": area,
-        "is_correct (estimated)": is_correct,
-    }
-    # Ignore horizontal images.
-    yield display if display.shape[0] > 899 else None, df_row
-    # Utils.show_image(display)
-    # console.print(
-    #     Panel(
-    #         f"Image: {smp.name}\n"
-    #         f"Has flash: {smp.has_flash}\n"
-    #         f"Has light: {smp.has_light}\n"
-    #         f"Is blurry: {is_image_blurry(smp.data)}\n"
-    #         f"Detected area: {area}\n"
-    #         f"Is correct (estimated): {estimated_is_detection_correct}",
-    #         highlight=True,
-    #         title=smp.path.name,
-    #     )
-    # )
+        df_row = {
+            "name": smp.name,
+            "has_flash": smp.has_flash,
+            "has_light": smp.has_light,
+            "blur": blurry,
+            "is_blurry": is_blurry,
+            "area": area,
+            "is_correct (estimated)": is_correct,
+        }
+        # Ignore horizontal images.
+        yield display if display.shape[0] > 899 else None, df_row
+        Utils.show_image(display)
+        # console.print(
+        #     Panel(
+        #         f"Image: {smp.name}\n"
+        #         f"Has flash: {smp.has_flash}\n"
+        #         f"Has light: {smp.has_light}\n"
+        #         f"Is blurry: {is_image_blurry(smp.data)}\n"
+        #         f"Detected area: {area}\n"
+        #         f"Is correct (estimated): {estimated_is_detection_correct}",
+        #         highlight=True,
+        #         title=smp.path.name,
+        #     )
+        # )
 
-    # Save file in the output directory
-    output_dir = Path(__file__).parent.parent / "outputs"
-    output_dir.mkdir(exist_ok=True)
-    output_path = output_dir / f"{smp.name}_processed.jpeg"
-    cv.imwrite(str(output_path), display)
+        # Save file in the output directory
+        output_dir = Path(__file__).parent.parent / "outputs"
+        output_dir.mkdir(exist_ok=True)
+        output_path = output_dir / f"{smp.name}_processed.jpeg"
+        cv.imwrite(str(output_path), display)
 
-    # Save mask if it is not None
-    if processed is not None:
-        mask_path = output_dir / f"{smp.name}_mask.jpeg"
-        cv.imwrite(str(mask_path), corners)
+        # Save mask if it is not None
+        if processed is not None:
+            mask_path = output_dir / f"{smp.name}_mask.jpeg"
+            cv.imwrite(str(mask_path), corners)
+    except ValueError:
+        yield None, {}
 
 
 def morphological_region_detect(
@@ -393,9 +399,7 @@ def main():
     hide_correct = False
     wait_single = True
     batch_size = 4
-    # log.info(dataset.pretty_df)
-    # sample = dataset.get("simple", False, False)
-    # log.info(sample)
+    log.info(dataset.pretty_df)
     df_rows = []
     proced = process_samples(dataset, output_dir)
     for i, item in enumerate(
