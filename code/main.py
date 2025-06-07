@@ -349,6 +349,10 @@ def find_contour(image: np.ndarray) -> tuple[np.ndarray, float]:
 
 
 def main():
+    # Create output directory if it doesn't exist
+    output_dir = Path(__file__).parent.parent / "outputs"
+    output_dir.mkdir(exist_ok=True)
+
     dataset = Dataset()
     render = False
     hide_correct = False
@@ -358,7 +362,7 @@ def main():
     # sample = dataset.get("simple", False, False)
     # log.info(sample)
     df_rows = []
-    proced = process_samples(dataset)
+    proced = process_samples(dataset, output_dir)
     for i, item in enumerate(
             itertools.batched((it for it in track(proced, total=len(dataset.items), console=console) if not hide_correct or not it[1]['is_correct (estimated)']),
                               batch_size)):
@@ -395,9 +399,9 @@ def main():
     if render and not wait_single: Utils.show_image(wait=True)
 
 
-def process_samples(dataset):
+def process_samples(dataset, output_dir):
     for smp in dataset.items:
-        yield from process_sample(smp)
+        yield from process_sample(smp, output_dir)
 
 
 def analyse_results(processed, area, contour, clean_contour):
@@ -417,7 +421,7 @@ def analyse_results(processed, area, contour, clean_contour):
 
     return processed, area, contour, clean_contour, is_correct, size_ratio, corners
 
-def process_sample(smp):
+def process_sample(smp, output_dir: Path):
     blurry = is_image_blurry3(smp.data)
     is_blurry = blurry < 50
     image_data = smp.data
@@ -483,6 +487,17 @@ def process_sample(smp):
     #         title=smp.path.name,
     #     )
     # )
+
+    # Save file in the output directory
+    output_dir = Path(__file__).parent.parent / "outputs"
+    output_dir.mkdir(exist_ok=True)
+    output_path = output_dir / f"{smp.name}_processed.jpeg"
+    cv.imwrite(str(output_path), display)
+
+    # Save mask if it is not None
+    if processed is not None:
+        mask_path = output_dir / f"{smp.name}_mask.jpeg"
+        cv.imwrite(str(mask_path), corners)
 
 
 def morphological_region_detect(image_data: np.ndarray, color: int = 0) -> tuple[Img, float, Contour, Contour]:
