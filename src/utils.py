@@ -1,9 +1,9 @@
 import cv2
 import cv2 as cv
 import numpy as np
+from rich.console import Console
 
-from code.main import console
-
+console = Console()
 
 class Utils:
     @staticmethod

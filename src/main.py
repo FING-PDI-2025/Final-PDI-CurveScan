@@ -10,16 +10,16 @@ import logging
 from rich.layout import Panel
 from rich.logging import RichHandler
 from rich.progress import track
+from rich.console import Console
 
-from .dataset import Dataset
-from .utils import Utils
+from dataset import Dataset
+from utils import Utils
 
 logging.basicConfig(
     level="NOTSET", format="%(message)s", datefmt="[%X]", handlers=[RichHandler()]
 )
 
 log = logging.getLogger("rich")
-from rich.console import Console
 
 console = Console()
 Img: TypeAlias = cv.Mat | np.ndarray[Any, np.dtype]
@@ -171,91 +171,6 @@ def find_contour(image: np.ndarray) -> tuple[np.ndarray, float]:
     area = cv.contourArea(highest_area_contour)
     image = cv.bitwise_and(image, image, mask=mask)
     return image, area
-
-
-def main():
-    # Create output directory if it doesn't exist
-    output_dir = Path(__file__).parent.parent / "outputs"
-    output_dir.mkdir(exist_ok=True)
-
-    dataset = Dataset()
-    render = False
-    hide_correct = False
-    wait_single = True
-    batch_size = 4
-    # log.info(dataset.pretty_df)
-    # sample = dataset.get("simple", False, False)
-    # log.info(sample)
-    df_rows = []
-    proced = process_samples(dataset, output_dir)
-    for i, item in enumerate(
-        itertools.batched(
-            (
-                it
-                for it in track(proced, total=len(dataset.items), console=console)
-                if not hide_correct or not it[1]["is_correct (estimated)"]
-            ),
-            batch_size,
-        )
-    ):
-        batch = [x for x, y in item if x is not None]
-        df_rows.extend([y for x, y in item])
-        if not render:
-            continue
-        if len(batch) != 1:
-            batch = np.vstack(batch)
-        else:
-            batch = batch[0]
-        Utils.show_image(batch, wait=wait_single, offset=0)
-    df = pd.DataFrame(df_rows)
-    # df = df.sort_values(["is_correct (estimated)", "blur", "name", "has_flash", "has_light"]).reset_index(drop=True)
-    console.print(Panel(str(df), highlight=True, expand=False))
-    console.print(
-        f"Total correct detections (estimated): {df['is_correct (estimated)'].sum()}"
-    )
-    # Is correct group by (has_flash and has_light)
-    correct_grouped = (
-        df.groupby(["has_flash", "has_light"])["is_correct (estimated)"]
-        .agg(["sum", "count"])
-        .reset_index()
-    )
-    correct_grouped["percentage"] = (
-        correct_grouped["sum"] / correct_grouped["count"]
-    ) * 100
-    console.print(
-        Panel(
-            str(correct_grouped),
-            highlight=True,
-            title="Correct Detections Grouped by Flash and Light",
-            expand=False,
-        )
-    )
-
-    correct_grouped = (
-        df.groupby(["name"])["is_correct (estimated)"]
-        .agg(["sum", "count"])
-        .reset_index()
-    )
-    correct_grouped["percentage"] = (
-        correct_grouped["sum"] / correct_grouped["count"]
-    ) * 100
-    console.print(
-        Panel(
-            str(correct_grouped),
-            highlight=True,
-            title="Correct Detections Grouped by Name",
-            expand=False,
-        )
-    )
-
-    correct_total = df["is_correct (estimated)"].sum()
-    total_images = len(df)
-    console.print(
-        f"Total correct detections (estimated): {correct_total} out of {total_images} ({(correct_total / total_images) * 100:.2f}%)"
-    )
-
-    if render and not wait_single:
-        Utils.show_image(wait=True)
 
 
 def process_samples(dataset, output_dir):
@@ -466,6 +381,91 @@ def mask_blue(inp: np.ndarray, color: int = 0) -> np.ndarray:
     mask *= 3
     mask = cv.cvtColor(mask, cv.COLOR_GRAY2BGR)
     return mask
+
+
+def main():
+    # Create output directory if it doesn't exist
+    output_dir = Path(__file__).parent.parent / "outputs"
+    output_dir.mkdir(exist_ok=True)
+
+    dataset = Dataset()
+    render = False
+    hide_correct = False
+    wait_single = True
+    batch_size = 4
+    # log.info(dataset.pretty_df)
+    # sample = dataset.get("simple", False, False)
+    # log.info(sample)
+    df_rows = []
+    proced = process_samples(dataset, output_dir)
+    for i, item in enumerate(
+        itertools.batched(
+            (
+                it
+                for it in track(proced, total=len(dataset.items), console=console)
+                if not hide_correct or not it[1]["is_correct (estimated)"]
+            ),
+            batch_size,
+        )
+    ):
+        batch = [x for x, y in item if x is not None]
+        df_rows.extend([y for x, y in item])
+        if not render:
+            continue
+        if len(batch) != 1:
+            batch = np.vstack(batch)
+        else:
+            batch = batch[0]
+        Utils.show_image(batch, wait=wait_single, offset=0)
+    df = pd.DataFrame(df_rows)
+    # df = df.sort_values(["is_correct (estimated)", "blur", "name", "has_flash", "has_light"]).reset_index(drop=True)
+    console.print(Panel(str(df), highlight=True, expand=False))
+    console.print(
+        f"Total correct detections (estimated): {df['is_correct (estimated)'].sum()}"
+    )
+    # Is correct group by (has_flash and has_light)
+    correct_grouped = (
+        df.groupby(["has_flash", "has_light"])["is_correct (estimated)"]
+        .agg(["sum", "count"])
+        .reset_index()
+    )
+    correct_grouped["percentage"] = (
+        correct_grouped["sum"] / correct_grouped["count"]
+    ) * 100
+    console.print(
+        Panel(
+            str(correct_grouped),
+            highlight=True,
+            title="Correct Detections Grouped by Flash and Light",
+            expand=False,
+        )
+    )
+
+    correct_grouped = (
+        df.groupby(["name"])["is_correct (estimated)"]
+        .agg(["sum", "count"])
+        .reset_index()
+    )
+    correct_grouped["percentage"] = (
+        correct_grouped["sum"] / correct_grouped["count"]
+    ) * 100
+    console.print(
+        Panel(
+            str(correct_grouped),
+            highlight=True,
+            title="Correct Detections Grouped by Name",
+            expand=False,
+        )
+    )
+
+    correct_total = df["is_correct (estimated)"].sum()
+    total_images = len(df)
+    console.print(
+        f"Total correct detections (estimated): {correct_total} out of {total_images} ({(correct_total / total_images) * 100:.2f}%)"
+    )
+
+    if render and not wait_single:
+        Utils.show_image(wait=True)
 
 
 if __name__ == "__main__":

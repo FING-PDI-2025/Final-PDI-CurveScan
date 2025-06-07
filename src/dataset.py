@@ -1,20 +1,25 @@
+import logging
 from functools import cached_property
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
-from code.main import DatasetItem, log
+from dataset_item import DatasetItem
+
+log = logging.getLogger("dataset")
 
 
 class Dataset:
-    path: Path = Path(__file__).parent.parent / "datasets" / "caratulas"
+    path: Path = Path(__file__).parent.parent / "datasets"
 
     def __init__(self):
-        self.images = [image for image in self.path.glob("*.jpeg")]
+        self.images = []
+        self.images += [image for image in self.path.rglob("*.jpeg")]
+        self.images += [image for image in self.path.rglob("*.jpg")]
         log.debug(f"Found {len(self.images)} images.")
 
     @cached_property
-    def items(self) -> list["DatasetItem"]:
+    def items(self) -> list[DatasetItem]:
         """
         Get the items in the dataset
         """
@@ -48,16 +53,16 @@ class Dataset:
         return df
 
     def get(
-            self, name: str, has_flash: bool = True, has_light: bool = True
+        self, name: str, has_flash: bool = True, has_light: bool = True
     ) -> Optional["DatasetItem"]:
         """
         Get the image with the given name and properties
         """
         for item in self.items:
             if (
-                    item.name == name
-                    and item.has_flash == has_flash
-                    and item.has_light == has_light
+                item.name == name
+                and item.has_flash == has_flash
+                and item.has_light == has_light
             ):
                 return item
         return None

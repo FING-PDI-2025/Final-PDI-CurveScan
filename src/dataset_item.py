@@ -10,7 +10,7 @@ import numpy as np
 @dataclass
 class DatasetItem:
     path: Path
-    _base_dataset: Dataset
+    _base_dataset: "Dataset"
 
     @cached_property
     def name(self) -> str:
