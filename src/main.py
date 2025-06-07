@@ -25,6 +25,121 @@ console = Console()
 Img: TypeAlias = cv.Mat | np.ndarray[Any, np.dtype]
 Contour: TypeAlias = Img
 
+def lerp_color(color1, color2, t):
+    """
+    Linearly interpolate between two colors.
+    :param color1: The first color (BGR tuple).
+    :param color2: The second color (BGR tuple).
+    :param t: Interpolation factor (0.0 to 1.0).
+    :return: Interpolated color (BGR tuple).
+    """
+    return tuple(int(c1 + (c2 - c1) * t) for c1, c2 in zip(color1, color2))
+
+
+def smooth_contour(contour, kernel_size=151, epsilon=0.01):
+    old_area = cv.contourArea(contour)
+
+    # Compute tight bounding rectangle
+    x, y, w, h = cv.boundingRect(contour)
+    padding = kernel_size // 2 + 1
+
+    # Create small mask based on bounding rect
+    mask = np.zeros((h + 2 * padding, w + 2 * padding), dtype=np.uint8)
+
+    # Shift contour to bounding rect coordinates
+    shifted_contour = contour - [x - padding, y - padding]
+
+    # Draw filled contour on the small mask
+    cv.drawContours(mask, [shifted_contour], -1, 255, thickness=cv.FILLED)
+
+    # Efficient smoothing operation
+    kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (kernel_size, kernel_size))
+    mask = cv.blur(mask, (kernel_size, kernel_size))
+    mask = cv.morphologyEx(mask, cv.MORPH_ERODE, kernel)
+
+    # Find contours on the processed mask
+    contours, _ = cv.findContours(mask, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+
+    if contours:
+        new_contour = contours[0] + [x - padding, y - padding]
+        new_area = cv.contourArea(new_contour)
+        # print(f"Old area: {old_area}, New area: {new_area}, Number of contours found: {len(contours)}")
+        return new_contour
+    else:
+        print("Failed to smooth.")
+        return contour
+
+
+def process_image(image: np.ndarray, rating_threshold = 0.1) -> list[tuple[np.ndarray, float]]:
+    blurred = cv.GaussianBlur(image, (5, 5), 0)
+    # Apply morphological gradient
+    kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (5, 5))
+    gradient = cv.morphologyEx(blurred, cv.MORPH_GRADIENT, kernel)
+    gray_gradient = cv.cvtColor(gradient, cv.COLOR_BGR2GRAY)
+    canny = cv.Canny(gray_gradient, 50, 200)
+    kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (5, 5))
+    canny = cv.morphologyEx(canny, cv.MORPH_DILATE, kernel)
+    kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, (35, 35))
+    canny = cv.morphologyEx(canny, cv.MORPH_CLOSE, kernel)
+    contours, hierarchy = cv.findContours(canny, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE)
+    contour_renders = []
+    for i, contour in enumerate(contours):
+        col = np.random.randint(0, 255, size=(3,), dtype=np.uint8)
+        area = cv.contourArea(contour)
+        if area < 150 * 150:
+            continue  # Skip small contours
+        new_contour = smooth_contour(contour)
+        if new_contour is contour:
+            print(f"Failed to smooth contour {i}, area: {area}")
+        contour = new_contour
+        area = cv.contourArea(contour)
+        if area < 100 * 100:
+            continue  # Skip small contours
+        # cv.drawContours(contour_render, contours, i, col.tolist(), 2)
+        # cv.drawContours(contour_render, [contour], -1, col.tolist(), 16)
+        # Approximate the contour to a polygon
+        approx = cv.approxPolyN(contour, 4)
+        # Draw the approximated polygon
+        approximation_area = cv.contourArea(approx)
+        approx_side_lengths = [np.linalg.norm(approx[0][j] - approx[0][(j + 1) % len(approx[0])]) for j in
+                               range(len(approx[0]))]
+        side_a_len = approx_side_lengths[0] + approx_side_lengths[2]
+        side_b_len = approx_side_lengths[1] + approx_side_lengths[3]
+        # Add text with contour index
+        # cv.putText(contour_render, str(i), tuple(approx[0][2]), cv.FONT_HERSHEY_SIMPLEX, 3, col.tolist(), 3)
+        side_a_ratio = approx_side_lengths[0] / approx_side_lengths[2] if approx_side_lengths[2] != 0 else 0
+        side_b_ratio = approx_side_lengths[1] / approx_side_lengths[3] if approx_side_lengths[3] != 0 else 0
+        aspect_ratio = side_a_len / side_b_len if side_b_len != 0 else 0
+        if aspect_ratio < 1:
+            aspect_ratio = 1 / aspect_ratio  # Ensure aspect ratio is >= 1
+        ratio_rating = abs((2 ** 0.5) - aspect_ratio)
+        side_rating = abs(1 - (side_a_ratio + side_b_ratio) / 2)
+        overall_rating = (ratio_rating + side_rating) / 2
+        if overall_rating < rating_threshold:
+            render = np.zeros_like(image)
+            cv.drawContours(render, [contour], -1, (255,255,255), -1)
+            contour_renders.append((render, overall_rating))
+
+        # cv.drawContours(contour_render, [approx], -1, lerp_color((255, 0, 0), (0, 255, 255), overall_rating), 4)
+        # df.append({
+        #     'index': i,
+        #     'area': area,
+        #     'rect_area': approximation_area,
+        #     # 'side_a': side_a_len,
+        #     # 'side_b': side_b_len,
+        #     # 'side_a_ratio': side_a_ratio,
+        #     # 'side_b_ratio': side_b_ratio,
+        #     'side_rating': side_rating,
+        #     'aspect_ratio': aspect_ratio,
+        #     'overall_rating': overall_rating
+        # })
+
+    # df = pd.DataFrame(df)
+    # df['ratio'] = df['area'] / df['rect_area']
+    # pd.set_option('display.max_rows', 500)
+    # df[df['overal_rating'] < rating_threshold]
+    return contour_renders
+
 
 def border_detect(image: np.ndarray) -> np.ndarray:
     """
@@ -201,79 +316,19 @@ def analyse_results(processed, area, contour, clean_contour):
 
 
 def process_sample(smp, output_dir: Path):
-    try:
+    # try:
         blurry = is_image_blurry3(smp.data)
         is_blurry = blurry < 50
         image_data = smp.data
-        (
-            raw_processed,
-            raw_area,
-            raw_contour,
-            raw_clean_contour,
-            raw_is_correct,
-            raw_size_ratio,
-            raw_corners,
-        ) = analyse_results(*region_detect2(image_data))
-        # (
-        #     morph_r_processed,
-        #     morph_r_area,
-        #     morph_r_contour,
-        #     morph_r_clean_contour,
-        #     morph_r_is_correct,
-        #     morph_r_size_ratio,
-        #     morph_r_corners,
-        # ) = analyse_results(*morphological_region_detect(image_data, 2))
-        # (
-        #     morph_g_processed,
-        #     morph_g_area,
-        #     morph_g_contour,
-        #     morph_g_clean_contour,
-        #     morph_g_is_correct,
-        #     morph_g_size_ratio,
-        #     morph_g_corners,
-        # ) = analyse_results(*morphological_region_detect(image_data, 1))
-        (
-            morph_b_processed,
-            morph_b_area,
-            morph_b_contour,
-            morph_b_clean_contour,
-            morph_b_is_correct,
-            morph_b_size_ratio,
-            morph_b_corners,
-        ) = analyse_results(*morphological_region_detect(image_data, 0))
-
-        # precedence = ["morph_b", "morph_g", "morph_r", "raw"]
-        precedence = ["morph_b", "raw"]
-        processed = None
-        area = 0
-        contour = None
-        clean_contour = None
-        is_correct = False
-        size_ratio = 0
-        corners = None
-        # Select first that "is_correct"
-        for name in precedence:
-            if locals()[f"{name}_is_correct"]:
-                processed = locals()[f"{name}_processed"]
-                area = locals()[f"{name}_area"]
-                contour = locals()[f"{name}_contour"]
-                clean_contour = locals()[f"{name}_clean_contour"]
-                is_correct = locals()[f"{name}_is_correct"]
-                size_ratio = locals()[f"{name}_size_ratio"]
-                corners = locals()[f"{name}_corners"]
-                break
-        if processed is None:
-            # Show morph_b
-            processed = morph_b_processed
-            area = morph_b_area
-            contour = morph_b_contour
-            clean_contour = morph_b_clean_contour
-            is_correct = morph_b_is_correct
-            size_ratio = morph_b_size_ratio
-            corners = morph_b_corners
-
+        processed = process_image(image_data)
+        for image, score in processed:
+            log.info(f"Score: {score}")
+            mixed = cv.bitwise_and(image_data, image_data, mask=cv.cvtColor(image, cv.COLOR_BGR2GRAY))
+            display = np.hstack((image_data, image, mixed))
+            Utils.show_image(display, wait=True)
+        else:
+            display = image_data
         # log.debug(f"Morph: {morph_non_black_corners / (morph_non_black_processed + 1)}\n" + f"Raw: {raw_non_black_corners / (raw_non_black_processed + 1)}")
-        display = np.hstack((image_data, processed, corners))
         # log.debug(display.shape)
 
         df_row = {
@@ -282,12 +337,11 @@ def process_sample(smp, output_dir: Path):
             "has_light": smp.has_light,
             "blur": blurry,
             "is_blurry": is_blurry,
-            "area": area,
-            "is_correct (estimated)": is_correct,
+            # "area": area,
+            # "is_correct (estimated)": is_correct,
         }
         # Ignore horizontal images.
         yield display if display.shape[0] > 899 else None, df_row
-        Utils.show_image(display)
         # console.print(
         #     Panel(
         #         f"Image: {smp.name}\n"
@@ -308,11 +362,11 @@ def process_sample(smp, output_dir: Path):
         cv.imwrite(str(output_path), display)
 
         # Save mask if it is not None
-        if processed is not None:
-            mask_path = output_dir / f"{smp.name}_mask.jpeg"
-            cv.imwrite(str(mask_path), corners)
-    except ValueError:
-        yield None, {}
+        # if image is not None:
+        #     mask_path = output_dir / f"{smp.name}_mask.jpeg"
+        #     cv.imwrite(str(mask_path), image)
+    # except ValueError:
+    #     yield None, {}
 
 
 def morphological_region_detect(
