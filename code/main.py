@@ -2,17 +2,17 @@ import itertools
 
 import cv2
 import numpy as np
-from dataclasses import dataclass
 from pathlib import Path
-from functools import cached_property
-from typing import Optional, Any, TypeAlias, Sequence
+from typing import Any, TypeAlias
 import cv2 as cv
-from typing import Self
 import pandas as pd
 import logging
 from rich.layout import Panel
 from rich.logging import RichHandler
 from rich.progress import track
+
+from .dataset import Dataset
+from .utils import Utils
 
 logging.basicConfig(
     level="NOTSET", format="%(message)s", datefmt="[%X]", handlers=[RichHandler()]
@@ -24,183 +24,6 @@ from rich.console import Console
 console = Console()
 Img: TypeAlias = cv.Mat | np.ndarray[Any, np.dtype]
 Contour: TypeAlias = Img
-
-
-class Dataset:
-    path: Path = Path(__file__).parent.parent / "datasets" / "caratulas"
-
-    def __init__(self):
-        self.images = [image for image in self.path.glob("*.jpeg")]
-        log.debug(f"Found {len(self.images)} images.")
-
-    @cached_property
-    def items(self) -> list["DatasetItem"]:
-        """
-        Get the items in the dataset
-        """
-        return [DatasetItem(image, self) for image in self.images]
-
-    @cached_property
-    def df(self) -> pd.DataFrame:
-        """
-        Create a dataframe with the images and their properties
-        """
-        data = []
-        for item in self.items:
-            data.append(
-                {
-                    "name": item.name,
-                    "path": item.path,
-                    "has_flash": item.has_flash,
-                    "has_light": item.has_light,
-                }
-            )
-        return (
-            pd.DataFrame(data)
-            .sort_values(["name", "has_flash", "has_light"])
-            .reset_index(drop=True)
-        )
-
-    @cached_property
-    def pretty_df(self) -> pd.DataFrame:
-        df = self.df.copy(deep=True)
-        df["path"] = df["path"].apply(lambda x: x.name)
-        return df
-
-    def get(
-            self, name: str, has_flash: bool = True, has_light: bool = True
-    ) -> Optional["DatasetItem"]:
-        """
-        Get the image with the given name and properties
-        """
-        for item in self.items:
-            if (
-                    item.name == name
-                    and item.has_flash == has_flash
-                    and item.has_light == has_light
-            ):
-                return item
-        return None
-
-
-@dataclass
-class DatasetItem:
-    path: Path
-    _base_dataset: Dataset
-
-    @cached_property
-    def name(self) -> str:
-        """The name of the image without [flash] or [light] terms"""
-        stem = self.path.stem
-        parts = stem.split("_")
-        for column in ["flash", "light"]:
-            if "no" + column in parts:
-                parts.remove("no" + column)
-            if column in parts:
-                parts.remove(column)
-        return "_".join(parts)
-
-    @cached_property
-    def has_flash(self) -> bool:
-        if not "flash" in self.path.stem.lower():
-            raise ValueError(f"Image {self.path} does not have flash in its name")
-        return "noflash" not in self.path.stem.lower()
-
-    @cached_property
-    def has_light(self) -> bool:
-        if not "light" in self.path.stem.lower():
-            raise ValueError(f"Image {self.path} does not have light in its name")
-        return "nolight" not in self.path.stem.lower()
-
-    @property
-    def with_flash(self) -> Self:
-        """
-        Get the image with flash
-        """
-        return self._base_dataset.get(
-            self.name, has_flash=True, has_light=self.has_light
-        )
-
-    @property
-    def with_light(self) -> Self:
-        """
-        Get the image with light
-        """
-        return self._base_dataset.get(
-            self.name, has_flash=self.has_flash, has_light=True
-        )
-
-    @property
-    def without_flash(self) -> Self:
-        """
-        Get the image without flash
-        """
-        return self._base_dataset.get(
-            self.name, has_flash=False, has_light=self.has_light
-        )
-
-    @property
-    def without_light(self) -> Self:
-        """
-        Get the image without light
-        """
-        return self._base_dataset.get(
-            self.name, has_flash=self.has_flash, has_light=False
-        )
-
-    @property
-    def other_variants(self) -> list[Self]:
-        """
-        Get the other variants of the image
-        """
-        return [
-            item
-            for item in self._base_dataset.items
-            if item.name == self.name and item.path != self.path
-        ]
-
-    @cached_property
-    def data(self) -> np.ndarray:
-        """
-        Get the image data
-        """
-        return cv.imread(str(self.path.absolute()), cv.IMREAD_UNCHANGED)
-
-
-class Utils:
-    @staticmethod
-    def console_dump_bgr(image: np.ndarray) -> None:
-        """
-        Dump the image to the console using rich
-        """
-
-        concatenated = ""
-        for i in range(0, image.shape[0], 1):
-            for j in range(0, image.shape[1], 1):
-                b, g, r = image[i, j]
-                concatenated += f"[on rgb({r},{g},{b})]  [/on rgb({r},{g},{b})]"
-            concatenated += "\n"
-        console.print(concatenated)
-
-    @staticmethod
-    def show_image(*image: np.ndarray, wait=True, offset=0) -> None:
-        """
-        Show the image using OpenCV
-        """
-        for i, img in enumerate(image):
-            window = f"Image {i + offset}"
-            cv.namedWindow(window, cv2.WINDOW_NORMAL)
-            cv.imshow(window, img)
-            pos = (i + offset)
-            x = pos % 12
-            y = pos // 12
-            size = 900
-            cv.moveWindow(window, size * x + 1, size * y + 1)
-            cv.resizeWindow(window, size, size)
-        if not wait:
-            return
-        cv.waitKey(0)
-        cv.destroyAllWindows()
 
 
 def border_detect(image: np.ndarray) -> np.ndarray:
@@ -299,7 +122,9 @@ def is_image_blurry3(image: np.ndarray) -> float:
     gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
     dft = cv.dft(np.float32(gray), flags=cv.DFT_COMPLEX_OUTPUT)
     dft_shifted = np.fft.fftshift(dft)
-    magnitude_spectrum = 20 * np.log(cv.magnitude(dft_shifted[:, :, 0], dft_shifted[:, :, 1]))
+    magnitude_spectrum = 20 * np.log(
+        cv.magnitude(dft_shifted[:, :, 0], dft_shifted[:, :, 1])
+    )
     mean_magnitude = np.mean(magnitude_spectrum)
     return mean_magnitude
 
@@ -364,11 +189,19 @@ def main():
     df_rows = []
     proced = process_samples(dataset, output_dir)
     for i, item in enumerate(
-            itertools.batched((it for it in track(proced, total=len(dataset.items), console=console) if not hide_correct or not it[1]['is_correct (estimated)']),
-                              batch_size)):
+        itertools.batched(
+            (
+                it
+                for it in track(proced, total=len(dataset.items), console=console)
+                if not hide_correct or not it[1]["is_correct (estimated)"]
+            ),
+            batch_size,
+        )
+    ):
         batch = [x for x, y in item if x is not None]
         df_rows.extend([y for x, y in item])
-        if not render: continue
+        if not render:
+            continue
         if len(batch) != 1:
             batch = np.vstack(batch)
         else:
@@ -377,26 +210,52 @@ def main():
     df = pd.DataFrame(df_rows)
     # df = df.sort_values(["is_correct (estimated)", "blur", "name", "has_flash", "has_light"]).reset_index(drop=True)
     console.print(Panel(str(df), highlight=True, expand=False))
-    console.print(f"Total correct detections (estimated): {df['is_correct (estimated)'].sum()}")
+    console.print(
+        f"Total correct detections (estimated): {df['is_correct (estimated)'].sum()}"
+    )
     # Is correct group by (has_flash and has_light)
-    correct_grouped = df.groupby(["has_flash", "has_light"])["is_correct (estimated)"].agg(
-        ['sum', 'count']).reset_index()
-    correct_grouped['percentage'] = (correct_grouped['sum'] / correct_grouped['count']) * 100
-    console.print(Panel(str(correct_grouped), highlight=True, title="Correct Detections Grouped by Flash and Light",
-                        expand=False))
+    correct_grouped = (
+        df.groupby(["has_flash", "has_light"])["is_correct (estimated)"]
+        .agg(["sum", "count"])
+        .reset_index()
+    )
+    correct_grouped["percentage"] = (
+        correct_grouped["sum"] / correct_grouped["count"]
+    ) * 100
+    console.print(
+        Panel(
+            str(correct_grouped),
+            highlight=True,
+            title="Correct Detections Grouped by Flash and Light",
+            expand=False,
+        )
+    )
 
-    correct_grouped = df.groupby(["name"])["is_correct (estimated)"].agg(
-        ['sum', 'count']).reset_index()
-    correct_grouped['percentage'] = (correct_grouped['sum'] / correct_grouped['count']) * 100
-    console.print(Panel(str(correct_grouped), highlight=True, title="Correct Detections Grouped by Name", expand=False))
+    correct_grouped = (
+        df.groupby(["name"])["is_correct (estimated)"]
+        .agg(["sum", "count"])
+        .reset_index()
+    )
+    correct_grouped["percentage"] = (
+        correct_grouped["sum"] / correct_grouped["count"]
+    ) * 100
+    console.print(
+        Panel(
+            str(correct_grouped),
+            highlight=True,
+            title="Correct Detections Grouped by Name",
+            expand=False,
+        )
+    )
 
-    correct_total = df['is_correct (estimated)'].sum()
+    correct_total = df["is_correct (estimated)"].sum()
     total_images = len(df)
     console.print(
         f"Total correct detections (estimated): {correct_total} out of {total_images} ({(correct_total / total_images) * 100:.2f}%)"
     )
 
-    if render and not wait_single: Utils.show_image(wait=True)
+    if render and not wait_single:
+        Utils.show_image(wait=True)
 
 
 def process_samples(dataset, output_dir):
@@ -410,7 +269,9 @@ def analyse_results(processed, area, contour, clean_contour):
     """
     # Detect corners in the contour
     approx = cv2.approxPolyN(clean_contour, 4)
-    corners = cv.drawContours(np.zeros_like(processed), [approx], -1, (255, 255, 255), thickness=cv.FILLED)
+    corners = cv.drawContours(
+        np.zeros_like(processed), [approx], -1, (255, 255, 255), thickness=cv.FILLED
+    )
 
     # Count number of non-black pixels in the processed image
     non_black_corners = np.count_nonzero(corners)
@@ -421,14 +282,47 @@ def analyse_results(processed, area, contour, clean_contour):
 
     return processed, area, contour, clean_contour, is_correct, size_ratio, corners
 
+
 def process_sample(smp, output_dir: Path):
     blurry = is_image_blurry3(smp.data)
     is_blurry = blurry < 50
     image_data = smp.data
-    raw_processed, raw_area, raw_contour, raw_clean_contour, raw_is_correct, raw_size_ratio, raw_corners = analyse_results(*region_detect2(image_data))
-    morph_r_processed, morph_r_area, morph_r_contour, morph_r_clean_contour, morph_r_is_correct, morph_r_size_ratio, morph_r_corners = analyse_results(*morphological_region_detect(image_data, 2))
-    morph_g_processed, morph_g_area, morph_g_contour, morph_g_clean_contour, morph_g_is_correct, morph_g_size_ratio, morph_g_corners = analyse_results(*morphological_region_detect(image_data, 1))
-    morph_b_processed, morph_b_area, morph_b_contour, morph_b_clean_contour, morph_b_is_correct, morph_b_size_ratio, morph_b_corners = analyse_results(*morphological_region_detect(image_data, 0))
+    (
+        raw_processed,
+        raw_area,
+        raw_contour,
+        raw_clean_contour,
+        raw_is_correct,
+        raw_size_ratio,
+        raw_corners,
+    ) = analyse_results(*region_detect2(image_data))
+    (
+        morph_r_processed,
+        morph_r_area,
+        morph_r_contour,
+        morph_r_clean_contour,
+        morph_r_is_correct,
+        morph_r_size_ratio,
+        morph_r_corners,
+    ) = analyse_results(*morphological_region_detect(image_data, 2))
+    (
+        morph_g_processed,
+        morph_g_area,
+        morph_g_contour,
+        morph_g_clean_contour,
+        morph_g_is_correct,
+        morph_g_size_ratio,
+        morph_g_corners,
+    ) = analyse_results(*morphological_region_detect(image_data, 1))
+    (
+        morph_b_processed,
+        morph_b_area,
+        morph_b_contour,
+        morph_b_clean_contour,
+        morph_b_is_correct,
+        morph_b_size_ratio,
+        morph_b_corners,
+    ) = analyse_results(*morphological_region_detect(image_data, 0))
 
     precedence = ["morph_b", "morph_g", "morph_r", "raw"]
     processed = None
@@ -500,38 +394,51 @@ def process_sample(smp, output_dir: Path):
         cv.imwrite(str(mask_path), corners)
 
 
-def morphological_region_detect(image_data: np.ndarray, color: int = 0) -> tuple[Img, float, Contour, Contour]:
-    morphological_gradient: np.ndarray = cv.morphologyEx(image_data, cv.MORPH_GRADIENT, cv.getStructuringElement(cv.MORPH_RECT, (3, 3)))
+def morphological_region_detect(
+    image_data: np.ndarray, color: int = 0
+) -> tuple[Img, float, Contour, Contour]:
+    morphological_gradient: np.ndarray = cv.morphologyEx(
+        image_data, cv.MORPH_GRADIENT, cv.getStructuringElement(cv.MORPH_RECT, (3, 3))
+    )
     yuv = cv.cvtColor(morphological_gradient, cv.COLOR_BGR2YUV)
-    yuv[:,:,0] = cv.equalizeHist(yuv[:,:,0])
+    yuv[:, :, 0] = cv.equalizeHist(yuv[:, :, 0])
     eq = cv.cvtColor(yuv, cv.COLOR_YUV2BGR)
     # Utils.show_image(eq)
     signed_mg: np.ndarray = morphological_gradient.copy().astype(np.int16)
     mask: np.ndarray = mask_blue(signed_mg, color)
     # Find contours in the morphological gradient
-    contours, _ = cv.findContours(cv.cvtColor(mask, cv.COLOR_BGR2GRAY), cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv.findContours(
+        cv.cvtColor(mask, cv.COLOR_BGR2GRAY), cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE
+    )
     if not contours:
         log.warning("No contours found in the morphological gradient.")
         return mask, 0, [], np.zeros_like(image_data)
     largest_contour = max(contours, key=cv.contourArea)
     # Draw the largest contour on the original image
-    contour_render = cv.drawContours(np.zeros_like(mask), [largest_contour], -1, (255, 255, 255), thickness=cv.FILLED)
+    contour_render = cv.drawContours(
+        np.zeros_like(mask), [largest_contour], -1, (255, 255, 255), thickness=cv.FILLED
+    )
     contour_render = cv.cvtColor(contour_render, cv.COLOR_BGR2GRAY)
     contour_render = cv.medianBlur(contour_render, 5)
     # Apply morphological operations to clean up the contours
-    contour_render = cv.morphologyEx(contour_render, cv.MORPH_OPEN, cv.getStructuringElement(cv.MORPH_ELLIPSE, (50, 50)))
+    contour_render = cv.morphologyEx(
+        contour_render,
+        cv.MORPH_OPEN,
+        cv.getStructuringElement(cv.MORPH_ELLIPSE, (50, 50)),
+    )
     # contour_render = cv.morphologyEx(contour_render, cv.MORPH_DILATE, cv.getStructuringElement(cv.MORPH_ELLIPSE, (50, 50)))
     area = cv.contourArea(largest_contour)
     masked_image = cv.bitwise_and(image_data, image_data, mask=contour_render)
 
     # Detect contour on contour_render
-    clean_contours, _ = cv.findContours(contour_render, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+    clean_contours, _ = cv.findContours(
+        contour_render, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE
+    )
     if not clean_contours:
         largest_clean_contour = largest_contour
     else:
         # Get largest contour
         largest_clean_contour = max(clean_contours, key=cv.contourArea)
-
 
     return masked_image, area, largest_contour, largest_clean_contour
 
@@ -539,16 +446,23 @@ def morphological_region_detect(image_data: np.ndarray, color: int = 0) -> tuple
 def mask_blue(inp: np.ndarray, color: int = 0) -> np.ndarray:
     # Detect "Blue"
     match color:
-        case 0: mask = 2 * inp[:, :, 0] - inp[:, :, 1] - inp[:, :, 2]
-        case 1: mask = 2 * inp[:, :, 1] - inp[:, :, 0] - inp[:, :, 2]
-        case 2: mask = 2 * inp[:, :, 2] - inp[:, :, 0] - inp[:, :, 1]
+        case 0:
+            mask = 2 * inp[:, :, 0] - inp[:, :, 1] - inp[:, :, 2]
+        case 1:
+            mask = 2 * inp[:, :, 1] - inp[:, :, 0] - inp[:, :, 2]
+        case 2:
+            mask = 2 * inp[:, :, 2] - inp[:, :, 0] - inp[:, :, 1]
 
     mask[mask < 0] = 0
     mask = mask.astype(np.uint8)
     mask = cv.medianBlur(mask, 5)
     # Apply morphological operations to clean up the mask
-    mask = cv.morphologyEx(mask, cv.MORPH_CLOSE, cv.getStructuringElement(cv.MORPH_ELLIPSE, (5, 5)))
-    mask = cv.morphologyEx(mask, cv.MORPH_CLOSE, cv.getStructuringElement(cv.MORPH_ELLIPSE, (5, 5)))
+    mask = cv.morphologyEx(
+        mask, cv.MORPH_CLOSE, cv.getStructuringElement(cv.MORPH_ELLIPSE, (5, 5))
+    )
+    mask = cv.morphologyEx(
+        mask, cv.MORPH_CLOSE, cv.getStructuringElement(cv.MORPH_ELLIPSE, (5, 5))
+    )
     mask *= 3
     mask = cv.cvtColor(mask, cv.COLOR_GRAY2BGR)
     return mask
