@@ -487,16 +487,15 @@ def process_sample(smp, output_dir: Path):
     #         title=smp.path.name,
     #     )
     # )
-
-    # Save file in the output directory
-    output_dir = Path(__file__).parent.parent / "outputs"
-    output_dir.mkdir(exist_ok=True)
-    output_path = output_dir / f"{smp.name}_processed.jpeg"
-    cv.imwrite(str(output_path), display)
+    
+    # Save processed image
+    if processed is not None:
+        processed_path = output_dir / f"{smp.path.stem}_processed.jpeg"
+        cv.imwrite(str(processed_path), display)
 
     # Save mask if it is not None
     if processed is not None:
-        mask_path = output_dir / f"{smp.name}_mask.jpeg"
+        mask_path = output_dir / f"{smp.path.stem}_mask.png"
         cv.imwrite(str(mask_path), corners)
 
 

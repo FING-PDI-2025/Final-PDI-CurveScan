@@ -446,6 +446,7 @@ def batch_process(
         # Assuming format: name_flash/noflash_light/nolight_mask.png
         stem = mask_file.stem.replace("_mask", "")
         datasets_dir = input_path.parent / "datasets" / "caratulas"
+        original_file = datasets_dir / f"{stem}.jpeg"
         if datasets_dir.exists():
             for ext in [".jpeg", ".jpg", ".png"]:
                 test_path = datasets_dir / f"{stem}{ext}"
