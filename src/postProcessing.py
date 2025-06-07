@@ -85,224 +85,6 @@ def find_document_corners(mask_path):
     return sort_corners(corners)
 
 
-def apply_perspective_transform(image_path, corners, output_size=(1080, 1080)):
-    """Apply perspective transform to get a square document"""
-    # Read the image
-    image = cv2.imread(str(image_path))
-
-    if image is None:
-        log.error(f"Failed to read image: {image_path}")
-        return None
-
-    # Validate corners
-    if len(corners) != 4:
-        log.error(
-            f"Perspective transform requires exactly 4 corners, got {len(corners)}"
-        )
-        return None
-
-    # Define the destination points for the perspective transform
-    # This will be a square
-    dst_points = np.array(
-        [
-            [0, 0],  # top-left
-            [output_size[0], 0],  # top-right
-            [output_size[0], output_size[1]],  # bottom-right
-            [0, output_size[1]],  # bottom-left
-        ],
-        dtype=np.float32,
-    )
-
-    # Convert corners to numpy array
-    src_points = np.array(corners, dtype=np.float32)
-
-    # Calculate the perspective transform matrix
-    M = cv2.getPerspectiveTransform(src_points, dst_points)
-
-    # Apply the perspective transformation
-    warped = cv2.warpPerspective(image, M, output_size)
-
-    return warped
-
-
-def analyze_image(image):
-    """Analyze image for quality issues and return analysis results"""
-    results = {}
-
-    # Convert to grayscale if not already
-    if len(image.shape) == 3:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = image.copy()
-
-    # Calculate brightness
-    brightness = np.mean(gray)
-    results["brightness"] = brightness
-
-    # Calculate contrast
-    contrast = np.std(gray)
-    results["contrast"] = contrast
-
-    # Calculate blurriness using Laplacian variance method
-    laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-    results["sharpness"] = laplacian_var
-
-    # Calculate noise level using median absolute deviation
-    median = np.median(gray)
-    mad = np.median(np.abs(gray - median))
-    results["noise"] = mad
-
-    # Determine image quality based on thresholds
-    results["is_too_bright"] = brightness > 180
-    results["is_too_dark"] = brightness < 50
-    results["has_low_contrast"] = contrast < 40
-    results["is_blurry"] = laplacian_var < 100
-    results["is_noisy"] = mad > 10
-
-    return results
-
-
-def enhance_image(image, analysis, output_path):
-    """Enhance image based on analysis results"""
-    enhanced = image.copy()
-    enhancements_applied = []
-
-    # Apply white balance as first step
-    if len(enhanced.shape) == 3:
-        # Simple white balance using gray world assumption
-        b, g, r = cv2.split(enhanced)
-
-        # Calculate average of each channel
-        b_avg = np.mean(b)
-        g_avg = np.mean(g)
-        r_avg = np.mean(r)
-
-        # Calculate the gray average
-        gray_avg = (b_avg + g_avg + r_avg) / 3
-
-        # Scale the channels to balance them
-        b_scaled = np.clip((b * (gray_avg / b_avg)), 0, 255).astype(np.uint8)
-        g_scaled = np.clip((g * (gray_avg / g_avg)), 0, 255).astype(np.uint8)
-        r_scaled = np.clip((r * (gray_avg / r_avg)), 0, 255).astype(np.uint8)
-
-        # Merge the balanced channels
-        enhanced = cv2.merge([b_scaled, g_scaled, r_scaled])
-
-        enhancements_applied.append("white balanced")
-    else:
-        # For grayscale images - no white balance needed
-        pass
-
-    # Check if image is blurry
-    if True or analysis["is_blurry"]:
-        # Apply sharpening filter
-        kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
-        enhanced = cv2.filter2D(enhanced, -1, kernel)
-        enhancements_applied.append("sharpened")
-
-    # Check if image is noisy
-    if True or analysis["is_noisy"]:
-        # Apply bilateral filter to reduce noise while preserving edges
-        # This is especially good for text documents
-        if len(enhanced.shape) == 3:
-            enhanced = cv2.bilateralFilter(enhanced, 9, 75, 75)
-        else:
-            enhanced = cv2.bilateralFilter(enhanced, 9, 75, 75)
-        enhancements_applied.append("noise reduced")
-
-    # Generate Laplacian of the image for edge detection visualization
-    if len(enhanced.shape) == 3:
-        # Convert to grayscale for Laplacian
-        gray_enhanced = cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY)
-    else:
-        gray_enhanced = enhanced.copy()
-        # Apply adaptive thresholding to Laplacian to remove noise
-
-    # Apply Laplacian operator
-    laplacian = cv2.Laplacian(gray_enhanced, cv2.CV_64F)
-
-    # Scale to visible range
-    laplacian_abs = cv2.convertScaleAbs(laplacian)
-
-    # First normalize Laplacian to 8-bit range for thresholding
-    laplacian_norm = cv2.normalize(laplacian, None, 0, 255, cv2.NORM_MINMAX).astype(
-        np.uint8
-    )
-
-    # Apply simple threshold to get binary edges
-    _, thresh_value = cv2.threshold(
-        laplacian_norm, 100, 255, cv2.THRESH_BINARY  # Fixed threshold value
-    )
-
-    # Combine original Laplacian with thresholded version to keep edge strength
-    # but remove noise in flat areas
-    laplacian_abs = cv2.bitwise_and(laplacian_abs, thresh_value)
-
-    # Create a path for the Laplacian image
-    cv2.imwrite(str(output_path), laplacian_abs)
-    log.info(f"Laplacian image saved to {output_path}")
-
-    # Apply Sobel edge detection
-    sobel_x = cv2.Sobel(gray_enhanced, cv2.CV_64F, 1, 0, ksize=3)
-    sobel_y = cv2.Sobel(gray_enhanced, cv2.CV_64F, 0, 1, ksize=3)
-
-    # Calculate magnitude
-    sobel_magnitude = cv2.magnitude(sobel_x, sobel_y)
-
-    # Convert to 8-bit
-    sobel_abs = cv2.normalize(sobel_magnitude, None, 0, 255, cv2.NORM_MINMAX).astype(
-        np.uint8
-    )
-
-    # Create a path for the Sobel image
-    sobel_path = str(output_path).replace(".jpg", "_sobel.jpg")
-    cv2.imwrite(sobel_path, sobel_abs)
-    log.info(f"Sobel edge image saved to {sobel_path}")
-
-    # Combine original Laplacian with thresholded version to keep edge strength
-    # but remove noise in flat areas
-    laplacian_abs = cv2.bitwise_and(laplacian_abs, thresh_value)
-
-    # Create a path for the Laplacian image
-    cv2.imwrite(str(output_path), laplacian_abs)
-    log.info(f"Laplacian image saved to {output_path}")
-
-    # Combine Sobel edges with the enhanced image to improve detail sharpness
-    if len(enhanced.shape) == 3:
-        # For color images, we need to convert Sobel to 3-channel
-        sobel_colored = cv2.cvtColor(sobel_abs, cv2.COLOR_GRAY2BGR)
-
-        # Use the Sobel edges as an overlay with alpha blending
-        alpha = 0.3  # Adjust strength of edge enhancement
-        enhanced = cv2.addWeighted(enhanced, 1.0, sobel_colored, alpha, 0)
-        enhancements_applied.append("edge enhancement applied")
-    else:
-        # For grayscale images
-        alpha = 0.3
-        enhanced = cv2.addWeighted(enhanced, 1.0, sobel_abs, alpha, 0)
-        enhancements_applied.append("edge enhancement applied")
-
-    # Apply morphological opening to improve text clarity
-    # This is especially useful for removing small noise while preserving text shapes
-    kernel_size = 3
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-
-    if len(enhanced.shape) == 3:
-        # For color images, apply to each channel separately
-        b, g, r = cv2.split(enhanced)
-        b = cv2.morphologyEx(b, cv2.MORPH_OPEN, kernel)
-        g = cv2.morphologyEx(g, cv2.MORPH_OPEN, kernel)
-        r = cv2.morphologyEx(r, cv2.MORPH_OPEN, kernel)
-        enhanced = cv2.merge([b, g, r])
-    else:
-        # For grayscale images
-        enhanced = cv2.morphologyEx(enhanced, cv2.MORPH_OPEN, kernel)
-
-    enhancements_applied.append("morphological opening applied")
-
-    return enhanced, enhancements_applied
-
-
 def get_output_dimensions(corners, max_dimension=A4_DIM):
     """Calculate output dimensions based on detected document shape, maximizing size within limits"""
     # Calculate width and height of the detected document
@@ -352,6 +134,128 @@ def get_output_dimensions(corners, max_dimension=A4_DIM):
     return (width, height)
 
 
+def apply_perspective_transform(image_path, corners, output_size=(1080, 1080)):
+    """Apply perspective transform to get a square document"""
+    # Read the image
+    image = cv2.imread(str(image_path))
+
+    if image is None:
+        log.error(f"Failed to read image: {image_path}")
+        return None
+
+    # Validate corners
+    if len(corners) != 4:
+        log.error(
+            f"Perspective transform requires exactly 4 corners, got {len(corners)}"
+        )
+        return None
+
+    # Define the destination points for the perspective transform
+    # This will be a square
+    dst_points = np.array(
+        [
+            [0, 0],  # top-left
+            [output_size[0], 0],  # top-right
+            [output_size[0], output_size[1]],  # bottom-right
+            [0, output_size[1]],  # bottom-left
+        ],
+        dtype=np.float32,
+    )
+
+    # Convert corners to numpy array
+    src_points = np.array(corners, dtype=np.float32)
+
+    # Calculate the perspective transform matrix
+    M = cv2.getPerspectiveTransform(src_points, dst_points)
+
+    # Apply the perspective transformation
+    warped = cv2.warpPerspective(image, M, output_size)
+
+    return warped
+
+
+def enhance_image(image, output_path):
+    """Enhance image based on analysis results"""
+    enhanced = image.copy()
+    enhancements_applied = []
+
+    # ------ Apply white balance as first step ------
+    # Simple white balance using gray world assumption
+    b, g, r = cv2.split(enhanced)
+
+    # Calculate average of each channel
+    b_avg = np.mean(b)
+    g_avg = np.mean(g)
+    r_avg = np.mean(r)
+
+    # Calculate the gray average
+    gray_avg = (b_avg + g_avg + r_avg) / 3
+
+    # Scale the channels to balance them
+    b_scaled = np.clip((b * (gray_avg / b_avg)), 0, 255).astype(np.uint8)
+    g_scaled = np.clip((g * (gray_avg / g_avg)), 0, 255).astype(np.uint8)
+    r_scaled = np.clip((r * (gray_avg / r_avg)), 0, 255).astype(np.uint8)
+
+    # Merge the balanced channels
+    enhanced = cv2.merge([b_scaled, g_scaled, r_scaled])
+    enhancements_applied.append("white balanced")
+
+    # ------ Apply sharpening filter (to enhance details) ------
+    kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
+    enhanced = cv2.filter2D(enhanced, -1, kernel)
+    enhancements_applied.append("sharpened")
+
+    # ------ Apply bilateral filter to reduce noise while preserving edges ------
+    # This is especially good for text documents
+    enhanced = cv2.bilateralFilter(enhanced, 9, 75, 75)
+    enhancements_applied.append("noise reduced")
+
+    # ------ Apply Sobel edge detection ------
+    # Convert to grayscale for edge detection
+    gray_enhanced = cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY)
+
+    # Use Sobel operator to find edges
+    sobel_x = cv2.Sobel(gray_enhanced, cv2.CV_64F, 1, 0, ksize=3)
+    sobel_y = cv2.Sobel(gray_enhanced, cv2.CV_64F, 0, 1, ksize=3)
+
+    # Calculate magnitude
+    sobel_magnitude = cv2.magnitude(sobel_x, sobel_y)
+
+    # Convert to 8-bit
+    sobel_abs = cv2.normalize(sobel_magnitude, None, 0, 255, cv2.NORM_MINMAX).astype(
+        np.uint8
+    )
+
+    # Create a path for the Sobel image
+    sobel_path = str(output_path).replace(".jpg", "_sobel.jpg")
+    cv2.imwrite(sobel_path, sobel_abs)
+    log.info(f"Sobel edge image saved to {sobel_path}")
+
+    # Combine Sobel edges with the enhanced image to improve detail sharpness
+    # For color images, we need to convert Sobel to 3-channel
+    sobel_colored = cv2.cvtColor(sobel_abs, cv2.COLOR_GRAY2BGR)
+
+    # Use the Sobel edges as an overlay with alpha blending
+    alpha = 0.4  # Adjust strength of edge enhancement
+    enhanced = cv2.addWeighted(enhanced, 1.0, sobel_colored, alpha, 0)
+    enhancements_applied.append("edge enhancement applied")
+
+    # ------ Apply morphological opening to improve text clarity ------
+    # This is especially useful for removing small noise while preserving text shapes
+    kernel_size = 3
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+
+    # For color images, apply to each channel separately
+    b, g, r = cv2.split(enhanced)
+    b = cv2.morphologyEx(b, cv2.MORPH_OPEN, kernel)
+    g = cv2.morphologyEx(g, cv2.MORPH_OPEN, kernel)
+    r = cv2.morphologyEx(r, cv2.MORPH_OPEN, kernel)
+    enhanced = cv2.merge([b, g, r])
+    enhancements_applied.append("morphological opening applied")
+
+    return enhanced, enhancements_applied
+
+
 def process_document(original_path, mask_path, output_path=None, max_dimension=A4_DIM):
     """Process a document image: find corners and apply perspective transform"""
 
@@ -374,51 +278,48 @@ def process_document(original_path, mask_path, output_path=None, max_dimension=A
 
     # Apply perspective transform
     transformed = apply_perspective_transform(original_path, corners, output_size)
+    final_image = transformed
 
     if transformed is None:
         return False
 
-    # Analyze the transformed image for quality issues
-    analysis = analyze_image(transformed)
+    # Enhance image quality
+    enhanced, enhancements = enhance_image(
+        transformed, str(output_dir / f"{Path(output_path).stem}_zap.jpg")
+    )
+    final_image = enhanced
 
-    # Log the image analysis
-    quality_issues = []
-    if analysis["is_too_bright"]:
-        quality_issues.append("too bright")
-    if analysis["is_too_dark"]:
-        quality_issues.append("too dark")
-    if analysis["has_low_contrast"]:
-        quality_issues.append("low contrast")
-    if analysis["is_blurry"]:
-        quality_issues.append("blurry")
-    if analysis["is_noisy"]:
-        quality_issues.append("noisy")
+    if len(enhancements) > 0:
+        log.info(f"Applied enhancements: {', '.join(enhancements)}")
 
-    final_image = transformed
+        # Create an output path for the enhanced image
+        transformed_path = output_dir / f"{Path(output_path).stem}_partial.jpg"
 
-    if quality_issues:
-        log.info(f"Image quality issues detected: {', '.join(quality_issues)}")
-
-        # Enhance image based on analysis
-        enhanced, enhancements = enhance_image(
-            transformed, analysis, str(output_dir / f"{Path(output_path).stem}_zap.jpg")
-        )
-        final_image = enhanced
-
-        if enhancements:
-            log.info(f"Applied enhancements: {', '.join(enhancements)}")
-
-            # Create an output path for the enhanced image
-            transformed_path = output_dir / f"{Path(output_path).stem}_partial.jpg"
-
-            # Save previous result for comparison
-            cv2.imwrite(str(transformed_path), transformed)
-            log.info(f"Intermediate image saved to {transformed_path}")
+        # Save previous result for comparison
+        cv2.imwrite(str(transformed_path), transformed)
+        log.info(f"Intermediate image saved to {transformed_path}")
 
     # Save the transformed and enhanced image
     cv2.imwrite(str(output_path), final_image)
     log.info(f"Transformed document saved to {output_path}")
 
+    # Save same image to results directory
+    results_path = (
+        output_dir.parent.parent / "results" / f"{Path(output_path).stem}_result.jpg"
+    )
+    cv2.imwrite(str(results_path), final_image)
+    log.info(f"Result image saved to {results_path}")
+
+    # Save same original image to results directory
+    original_results_path = (
+        output_dir.parent.parent
+        / "results"
+        / f"{Path(original_path).stem}_original.jpg"
+    )
+    cv2.imwrite(str(original_results_path), cv2.imread(str(original_path)))
+    log.info(f"Original image saved to {original_results_path}")
+
+    # Return success status
     return True
 
 
@@ -436,6 +337,10 @@ def batch_process(
     # Create output directory if it doesn't exist
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    result_dir = output_dir.parent.parent / "results"
+    # Create results directory if it doesn't exist
+    result_dir.mkdir(parents=True, exist_ok=True)
+
     # Find all mask files
     mask_files = list(input_path.glob(pattern))
     log.info(f"Found {len(mask_files)} mask files to process")
@@ -445,14 +350,25 @@ def batch_process(
         # Derive original image path
         # Assuming format: name_flash/noflash_light/nolight_mask.png
         stem = mask_file.stem.replace("_mask", "")
-        datasets_dir = input_path.parent / "datasets" / "caratulas"
-        original_file = datasets_dir / f"{stem}.jpeg"
+        datasets_dir = input_path.parent / "datasets"
+        original_file = None
+
+        # Check all subdirectories of datasets
         if datasets_dir.exists():
-            for ext in [".jpeg", ".jpg", ".png"]:
-                test_path = datasets_dir / f"{stem}{ext}"
-                if test_path.exists():
-                    original_file = test_path
-                    break
+            # Search in all subdirectories
+            for subdir in datasets_dir.glob("*"):
+                if subdir.is_dir():
+                    for ext in [".jpeg", ".jpg", ".png"]:
+                        test_path = subdir / f"{stem}{ext}"
+                        if test_path.exists():
+                            original_file = test_path
+                            break
+                    if original_file:
+                        break
+
+        # If not found, try with the original expected path
+        if not original_file:
+            original_file = datasets_dir / "caratulas" / f"{stem}.jpeg"
 
         # If we still can't find the original, skip
         if not original_file.exists():
