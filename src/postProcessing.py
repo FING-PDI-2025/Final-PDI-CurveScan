@@ -9,11 +9,11 @@ from rich.console import Console
 A4_DIM = (1240, 1754)  # A4 dimensions in px (width, height)
 
 # Set up rich logger and console
+console = Console()
 logging.basicConfig(
-    level="INFO", format="%(message)s", datefmt="[%X]", handlers=[RichHandler()]
+    level="INFO", format="%(message)s", datefmt="[%X]", handlers=[RichHandler(console=console)]
 )
 log = logging.getLogger("rich")
-console = Console()
 
 
 def sort_corners(corners):
@@ -352,7 +352,7 @@ def process_document(original_path, mask_path, output_path=None, max_dimension=A
 
 
 def batch_process(
-    input_dir, output_dir=None, pattern="*_mask.png", max_dimension=A4_DIM
+    input_dir, output_dir=None, pattern="*_mask_*.jpeg", max_dimension=A4_DIM
 ):
     """Process all documents in a directory based on their mask files"""
     input_path = Path(input_dir)
@@ -374,25 +374,23 @@ def batch_process(
     log.info(f"Found {len(mask_files)} mask files to process")
 
     success_count = 0
-    for mask_file in track(mask_files, description="Processing documents"):
+    for mask_file in track(mask_files, description="Processing documents", console=console):
         # Derive original image path
         # Assuming format: name_flash/noflash_light/nolight_mask.png
-        stem = mask_file.stem.replace("_mask", "")
+        mask_extra = mask_file.stem[mask_file.stem.index("_mask"):]
+        stem = mask_file.stem.replace(mask_extra, "")
         datasets_dir = input_path.parent / "datasets"
         original_file = None
 
         # Check all subdirectories of datasets
         if datasets_dir.exists():
             # Search in all subdirectories
-            for subdir in datasets_dir.glob("*"):
-                if subdir.is_dir():
-                    for ext in [".jpeg", ".jpg", ".png"]:
-                        test_path = subdir / f"{stem}{ext}"
-                        if test_path.exists():
-                            original_file = test_path
-                            break
-                    if original_file:
-                        break
+            rglob = list(datasets_dir.rglob(f"{stem}*"))
+            if len(rglob) > 1:
+                log.warning(
+                    f"Multiple files found for {stem} in datasets: {rglob}. Using the first one."
+                )
+            original_file = rglob[0]
 
         # If not found, try with the original expected path
         if not original_file:
@@ -404,7 +402,7 @@ def batch_process(
             continue
 
         # Define output path
-        output_file = output_dir / f"{stem}_transformed.jpg"
+        output_file = output_dir / f"{mask_file.stem}_transformed.jpg"
 
         ok = process_document(original_file, mask_file, output_file, max_dimension)
         # Process the document

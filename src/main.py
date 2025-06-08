@@ -304,7 +304,7 @@ def file_cache(base: str, key: str, compute: Callable[[], Any]) -> Any:
 def process_image(
     smp: DatasetItem, image: np.ndarray, rating_threshold=0.1
 ) -> list[tuple[np.ndarray, np.ndarray, np.ndarray, float]]:
-    pre_processed = file_cache(smp.name, "pre_process", lambda: pre_process_image(image))
+    pre_processed = file_cache(smp.path.stem, "pre_process", lambda: pre_process_image(image))
     contours, hierarchy = cv.findContours(
         pre_processed, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE
     )
@@ -512,9 +512,9 @@ def process_sample(smp: DatasetItem, output_dir: Path):
         )
         # Utils.show_image(display, wait=True)
         is_correct = area > 100_000
-        output_path = output_dir / f"{smp.name}_processed_{i}.jpeg"
+        output_path = output_dir / f"{smp.path.stem}_processed_{i}.jpeg"
         cv.imwrite(str(output_path), display)
-        mask_path = output_dir / f"{smp.name}_mask_{i}.jpeg"
+        mask_path = output_dir / f"{smp.path.stem}_mask_{i}.jpeg"
         cv.imwrite(str(mask_path), mask)
         df_row = {
             "name": smp.name,
@@ -654,18 +654,9 @@ def main():
     batch_size = 4
     log.info(dataset.pretty_df)
     df = file_cache("full_df", "computed", lambda: compue_df(batch_size, dataset, hide_correct, output_dir, render))
-    df = pd.DataFrame(df, columns=[
-        "name",
-        "region_id",
-        "has_flash",
-        "has_light",
-        "type",
-        "regions",
-        "blur",
-        "is_blurry",
-        "area",
-        "is_correct (estimated)",
-    ])
+    if not isinstance(df, list):
+        df = df.tolist()
+    df = pd.DataFrame(df)
 
     # df = df.sort_values(["is_correct (estimated)", "blur", "name", "has_flash", "has_light"]).reset_index(drop=True)
     console.print(Panel(str(df), highlight=True, expand=False))
