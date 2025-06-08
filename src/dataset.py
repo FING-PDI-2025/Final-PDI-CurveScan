@@ -36,6 +36,7 @@ class Dataset:
                 {
                     "name": item.name,
                     "path": item.path,
+                    "type": item.type,
                     "has_flash": item.has_flash,
                     "has_light": item.has_light,
                 }

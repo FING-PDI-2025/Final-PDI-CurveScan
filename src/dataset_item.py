@@ -36,6 +36,13 @@ class DatasetItem:
             raise ValueError(f"Image {self.path} does not have light in its name")
         return "nolight" not in self.path.stem.lower()
 
+    @cached_property
+    def type(self) -> str:
+        """
+        Get the type of the image based on its name
+        """
+        return self.path.parent.name
+
     @property
     def with_flash(self) -> Self:
         """
