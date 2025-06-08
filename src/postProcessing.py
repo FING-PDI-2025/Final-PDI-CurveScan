@@ -210,6 +210,29 @@ def enhance_image(image, output_path):
     enhanced = cv2.bilateralFilter(enhanced, 9, 75, 75)
     enhancements_applied.append("noise reduced")
 
+    # Save partial enhanced image
+    part_path = str(output_path).replace(".jpg", "_p1.jpg")
+    cv2.imwrite(part_path, enhanced)
+    log.info(f"Partial enhanced image saved to {output_path}")
+
+    # ------ Apply morphological erode to improve text clarity ------
+    # This is especially useful for removing small noise while preserving text shapes
+    kernel_size = 3
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+
+    # For color images, apply to each channel separately
+    b, g, r = cv2.split(enhanced)
+    b = cv2.morphologyEx(b, cv2.MORPH_ERODE, kernel)
+    g = cv2.morphologyEx(g, cv2.MORPH_ERODE, kernel)
+    r = cv2.morphologyEx(r, cv2.MORPH_ERODE, kernel)
+    enhanced = cv2.merge([b, g, r])
+    enhancements_applied.append("morphological opening applied")
+
+    # Save partial enhanced image
+    part_path = str(output_path).replace(".jpg", "_p2.jpg")
+    cv2.imwrite(part_path, enhanced)
+    log.info(f"Partial enhanced image saved to {output_path}")
+
     # ------ Apply Sobel edge detection ------
     # Convert to grayscale for edge detection
     gray_enhanced = cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY)
@@ -239,6 +262,11 @@ def enhance_image(image, output_path):
     alpha = 0.4  # Adjust strength of edge enhancement
     enhanced = cv2.addWeighted(enhanced, 1.0, sobel_colored, alpha, 0)
     enhancements_applied.append("edge enhancement applied")
+
+    # Save partial enhanced image
+    part_path = str(output_path).replace(".jpg", "_p3.jpg")
+    cv2.imwrite(part_path, enhanced)
+    log.info(f"Partial enhanced image saved to {output_path}")
 
     # ------ Apply morphological opening to improve text clarity ------
     # This is especially useful for removing small noise while preserving text shapes
