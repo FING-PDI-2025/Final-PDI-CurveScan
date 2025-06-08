@@ -321,27 +321,37 @@ def process_sample(smp, output_dir: Path):
         is_blurry = blurry < 50
         image_data = smp.data
         processed = process_image(image_data)
-        for image, score in processed:
-            log.info(f"Score: {score}")
-            mixed = cv.bitwise_and(image_data, image_data, mask=cv.cvtColor(image, cv.COLOR_BGR2GRAY))
-            display = np.hstack((image_data, image, mixed))
-            Utils.show_image(display, wait=True)
-        else:
-            display = image_data
+
+
+        output_dir = Path(__file__).parent.parent / "outputs"
+        output_dir.mkdir(exist_ok=True)
+
+        for i, (mask, score) in enumerate(processed):
+            mixed = cv.bitwise_and(image_data, image_data, mask=cv.cvtColor(mask, cv.COLOR_BGR2GRAY))
+            area = np.count_nonzero(mask)
+            display = np.hstack((image_data, mask, mixed))
+            # Utils.show_image(display, wait=True)
+            is_correct = area > 100_000
+            output_path = output_dir / f"{smp.name}_processed_{i}.jpeg"
+            cv.imwrite(str(output_path), display)
+            mask_path = output_dir / f"{smp.name}_mask_{i}.jpeg"
+            cv.imwrite(str(mask_path), mask)
+            df_row = {
+                "name": smp.name,
+                "region_id": i,
+                "has_flash": smp.has_flash,
+                "has_light": smp.has_light,
+                "regions": len(processed),
+                "blur": blurry,
+                "is_blurry": is_blurry,
+                "area": area,
+                "is_correct (estimated)": is_correct,
+            }
+            yield display if display.shape[0] > 899 else None, df_row
         # log.debug(f"Morph: {morph_non_black_corners / (morph_non_black_processed + 1)}\n" + f"Raw: {raw_non_black_corners / (raw_non_black_processed + 1)}")
         # log.debug(display.shape)
 
-        df_row = {
-            "name": smp.name,
-            "has_flash": smp.has_flash,
-            "has_light": smp.has_light,
-            "blur": blurry,
-            "is_blurry": is_blurry,
-            # "area": area,
-            # "is_correct (estimated)": is_correct,
-        }
         # Ignore horizontal images.
-        yield display if display.shape[0] > 899 else None, df_row
         # console.print(
         #     Panel(
         #         f"Image: {smp.name}\n"
@@ -356,15 +366,8 @@ def process_sample(smp, output_dir: Path):
         # )
 
         # Save file in the output directory
-        output_dir = Path(__file__).parent.parent / "outputs"
-        output_dir.mkdir(exist_ok=True)
-        output_path = output_dir / f"{smp.name}_processed.jpeg"
-        cv.imwrite(str(output_path), display)
 
-        # Save mask if it is not None
-        # if image is not None:
-        #     mask_path = output_dir / f"{smp.name}_mask.jpeg"
-        #     cv.imwrite(str(mask_path), image)
+
     # except ValueError:
     #     yield None, {}
 
@@ -474,7 +477,7 @@ def main():
             batch = np.vstack(batch)
         else:
             batch = batch[0]
-        Utils.show_image(batch, wait=wait_single, offset=0)
+        # Utils.show_image(batch, wait=wait_single, offset=0)
     df = pd.DataFrame(df_rows)
     # df = df.sort_values(["is_correct (estimated)", "blur", "name", "has_flash", "has_light"]).reset_index(drop=True)
     console.print(Panel(str(df), highlight=True, expand=False))
