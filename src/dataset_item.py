@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
-from typing import Self
+from typing import Optional, Self
 
 import cv2 as cv
 import numpy as np
@@ -10,7 +10,7 @@ import numpy as np
 @dataclass
 class DatasetItem:
     path: Path
-    _base_dataset: "Dataset"
+    _base_dataset: Optional["Dataset"] = None
 
     @cached_property
     def name(self) -> str:
@@ -48,6 +48,8 @@ class DatasetItem:
         """
         Get the image with flash
         """
+        if self._base_dataset is None:
+            raise ValueError("Base dataset is not set for this item")
         return self._base_dataset.get(
             self.name, has_flash=True, has_light=self.has_light
         )
@@ -57,6 +59,8 @@ class DatasetItem:
         """
         Get the image with light
         """
+        if self._base_dataset is None:
+            raise ValueError("Base dataset is not set for this item")
         return self._base_dataset.get(
             self.name, has_flash=self.has_flash, has_light=True
         )
@@ -66,6 +70,8 @@ class DatasetItem:
         """
         Get the image without flash
         """
+        if self._base_dataset is None:
+            raise ValueError("Base dataset is not set for this item")
         return self._base_dataset.get(
             self.name, has_flash=False, has_light=self.has_light
         )
@@ -75,6 +81,8 @@ class DatasetItem:
         """
         Get the image without light
         """
+        if self._base_dataset is None:
+            raise ValueError("Base dataset is not set for this item")
         return self._base_dataset.get(
             self.name, has_flash=self.has_flash, has_light=False
         )
@@ -84,6 +92,8 @@ class DatasetItem:
         """
         Get the other variants of the image
         """
+        if self._base_dataset is None:
+            raise ValueError("Base dataset is not set for this item")
         return [
             item
             for item in self._base_dataset.items

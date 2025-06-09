@@ -8,9 +8,13 @@ dependencies = [
     "ipython>=9.3.0",
     "jupyter>=1.1.1",
     "matplotlib>=3.10.3",
+    "opencv-contrib-python>=4.11.0.86",
     "opencv-python>=4.11.0.86",
     "pandas>=2.2.3",
     "rich>=14.0.0",
+    "scikit-image>=0.25.2",
+    "scipy>=1.15.3",
+    "typer>=0.16.0",
 ]
 
 [dependency-groups]
