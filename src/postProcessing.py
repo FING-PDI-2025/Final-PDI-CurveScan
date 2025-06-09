@@ -6,6 +6,8 @@ from rich.logging import RichHandler
 from rich.progress import track
 from rich.console import Console
 
+from utils import ImageProcessingIntermediateStepReporter, Img
+
 A4_DIM = (1240, 1754)  # A4 dimensions in px (width, height)
 
 # Set up rich logger and console
@@ -174,7 +176,7 @@ def apply_perspective_transform(image_path, corners, output_size=(1080, 1080)):
     return warped
 
 
-def enhance_image(image, output_path):
+def enhance_image(image: Img, reporter: ImageProcessingIntermediateStepReporter) -> tuple[Path, Img, list[str]]:
     """Enhance image based on analysis results"""
     enhanced = image.copy()
     enhancements_applied = []
@@ -198,22 +200,20 @@ def enhance_image(image, output_path):
 
     # Merge the balanced channels
     enhanced = cv2.merge([b_scaled, g_scaled, r_scaled])
+    reporter.output("white_balanced", enhanced)
     enhancements_applied.append("white balanced")
 
     # ------ Apply sharpening filter (to enhance details) ------
     kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
     enhanced = cv2.filter2D(enhanced, -1, kernel)
+    reporter.output("sharpened", enhanced)
     enhancements_applied.append("sharpened")
 
     # ------ Apply bilateral filter to reduce noise while preserving edges ------
     # This is especially good for text documents
     enhanced = cv2.bilateralFilter(enhanced, 9, 75, 75)
+    reporter.output("bilateral_filtered", enhanced)
     enhancements_applied.append("noise reduced")
-
-    # Save partial enhanced image
-    part_path = str(output_path).replace(".jpg", "_p1.jpg")
-    cv2.imwrite(part_path, enhanced)
-    log.info(f"Partial enhanced image saved to {output_path}")
 
     # ------ Apply morphological erode to improve text clarity ------
     # This is especially useful for removing small noise while preserving text shapes
@@ -226,12 +226,8 @@ def enhance_image(image, output_path):
     g = cv2.morphologyEx(g, cv2.MORPH_ERODE, kernel)
     r = cv2.morphologyEx(r, cv2.MORPH_ERODE, kernel)
     enhanced = cv2.merge([b, g, r])
+    reporter.output("morphological_erode", enhanced)
     enhancements_applied.append("morphological opening applied")
-
-    # Save partial enhanced image
-    part_path = str(output_path).replace(".jpg", "_p2.jpg")
-    cv2.imwrite(part_path, enhanced)
-    log.info(f"Partial enhanced image saved to {output_path}")
 
     # ------ Apply Sobel edge detection ------
     # Convert to grayscale for edge detection
@@ -248,11 +244,7 @@ def enhance_image(image, output_path):
     sobel_abs = cv2.normalize(sobel_magnitude, None, 0, 255, cv2.NORM_MINMAX).astype(
         np.uint8
     )
-
-    # Create a path for the Sobel image
-    sobel_path = str(output_path).replace(".jpg", "_sobel.jpg")
-    cv2.imwrite(sobel_path, sobel_abs)
-    log.info(f"Sobel edge image saved to {sobel_path}")
+    reporter.output("sobel_edges", sobel_abs)
 
     # Combine Sobel edges with the enhanced image to improve detail sharpness
     # For color images, we need to convert Sobel to 3-channel
@@ -261,12 +253,10 @@ def enhance_image(image, output_path):
     # Use the Sobel edges as an overlay with alpha blending
     alpha = 0.4  # Adjust strength of edge enhancement
     enhanced = cv2.addWeighted(enhanced, 1.0, sobel_colored, alpha, 0)
+    reporter.output("sobel_colored", enhanced)
     enhancements_applied.append("edge enhancement applied")
 
     # Save partial enhanced image
-    part_path = str(output_path).replace(".jpg", "_p3.jpg")
-    cv2.imwrite(part_path, enhanced)
-    log.info(f"Partial enhanced image saved to {output_path}")
 
     # ------ Apply morphological opening to improve text clarity ------
     # This is especially useful for removing small noise while preserving text shapes
@@ -279,9 +269,10 @@ def enhance_image(image, output_path):
     g = cv2.morphologyEx(g, cv2.MORPH_OPEN, kernel)
     r = cv2.morphologyEx(r, cv2.MORPH_OPEN, kernel)
     enhanced = cv2.merge([b, g, r])
+    output_path = reporter.output("morphological_opening", enhanced, kind="output")
     enhancements_applied.append("morphological opening applied")
 
-    return enhanced, enhancements_applied
+    return output_path, enhanced, enhancements_applied
 
 
 def process_document(original_path, mask_path, output_path=None, max_dimension=A4_DIM):
@@ -312,7 +303,7 @@ def process_document(original_path, mask_path, output_path=None, max_dimension=A
         return False
 
     # Enhance image quality
-    enhanced, enhancements = enhance_image(
+    _, enhanced, enhancements = enhance_image(
         transformed, str(output_dir / f"{Path(output_path).stem}_zap.jpg")
     )
     final_image = enhanced

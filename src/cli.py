@@ -1,6 +1,8 @@
+from enum import Enum
+
 import numpy as np
 from pathlib import Path
-from typing import Sequence
+from typing import Literal, Sequence
 import cv2 as cv
 import pandas as pd
 import logging
@@ -9,6 +11,7 @@ from rich.console import Console
 
 from dataset_item import DatasetItem
 import tps_transform_for_cli
+from postProcessing import enhance_image
 from utils import ImageProcessingIntermediateStepReporter, Img, adjust_gamma, smooth_contour
 from typer import Typer
 
@@ -18,7 +21,7 @@ log = logging.getLogger("rich")
 pd.set_option("display.max_rows", 500)
 app = Typer()
 console = Console()
-debug = False
+debug = True
 
 
 def pre_process_image(image: Img, reporter: ImageProcessingIntermediateStepReporter) -> Img:
@@ -223,9 +226,12 @@ def process_sample(
             "output_path": str(output_path),
         }
 
+class SamplingMethod(str, Enum):
+    spline = "spline"
+    contour_arc = "contour_arc"
 
 @app.command()
-def transform_image(input_path: Path, output_dir: Path | None = None) -> None:
+def transform_image(input_path: Path, output_dir: Path | None = None, sampling_method: SamplingMethod = 'spline') -> None:
     assert input_path.exists()
     if output_dir is None:
         output_dir = Path("output") / input_path.stem
@@ -239,14 +245,17 @@ def transform_image(input_path: Path, output_dir: Path | None = None) -> None:
     for df_row in process_sample(DatasetItem(path=input_path, _base_dataset=None), reporter):
         mask_path = Path(df_row["mask_path"])
         try:
-            tps_transform_for_cli.process_image(
+            output_image_path = tps_transform_for_cli.process_image(
                 input_path,
                 mask_path,
                 100,
                 smoothing=3,
-                sampling_method='spline',
+                sampling_method=sampling_method,
                 reporter=reporter,
             )
+            output_image = cv.imread(str(output_image_path), cv.IMREAD_UNCHANGED)
+            enhanced_path = enhance_image(image=output_image, reporter=reporter)
+
         except ValueError as e:
             console.print(f"Failed to transform image {input_path}: {e}")
 

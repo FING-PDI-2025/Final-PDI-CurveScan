@@ -45,7 +45,7 @@ def get_sorted_quadrilateral_corners(contour: Contour) -> Contour:
     Detects 4-corner quadrilateral from a contour and returns corners
     in order: Top-Left, Top-Right, Bottom-Right, Bottom-Left
     """
-    epsilon = 0.02 * cv2.arcLength(contour, True)
+    epsilon = 0.05 * cv2.arcLength(contour, True)
     approx = cv2.approxPolyDP(contour, epsilon, True).reshape(-1, 2)
     if len(approx) != 4:
         raise ValueError("Contour does not approximate a quadrilateral.")
@@ -350,7 +350,7 @@ def process_image(
     smoothing: int,
     sampling_method: Literal["spline", "contour_arc"],
     reporter: ImageProcessingIntermediateStepReporter,
-):
+) -> Path:
     with reporter.with_indent("tps_transform"):
         assert mask_image_path.exists()
         assert original_image_path.exists()
@@ -378,7 +378,7 @@ def process_image(
         )
 
         plot_original_transformed_image(original_image, transformed_image, reporter)
-        reporter.output("output_image", transformed_image, "output")
+        return reporter.output("output_image", transformed_image, "output")
 
 
 def plot_original_transformed_image(original_image: Img, transformed_image: Img, reporter: ImageProcessingIntermediateStepReporter):
